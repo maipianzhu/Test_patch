@@ -7,3 +7,5 @@ langchain_code_sync/frontend/node_modules
 langchain_code_sync/backend/checkpoints.db
 langchain_code_sync/backend/checkpoints.db-shm
 langchain_code_sync/backend/checkpoints.db-wal
+**/workspace/*
+langchain_code_sync/backend/workspace/repo_b

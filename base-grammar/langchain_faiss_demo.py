@@ -25,7 +25,7 @@ docs = [
 vector_db = FAISS.from_documents(docs, embeddings)
 
 # 4、进行搜索
-query = "我想吃脆脆甜甜的水果"
+query = "我想吃电动汽车"
 
 results = vector_db.similarity_search(query, k=1)
 for res in results:
@@ -39,3 +39,15 @@ print("索引已经保存到本地了")
 
 
 # 6、以后重新加载使用
+
+
+if __name__ == "__main__":
+    while True:
+        user_input = input("请输入你的问题:")
+        if user_input == "exit":
+            break
+        ress = vector_db.similarity_search(user_input, k=2)
+        for res in ress:
+            print("-" * 20)
+            print(f"找到的内容:{res.page_content}")
+            print(f"来源:{res.metadata}")

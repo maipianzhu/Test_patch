@@ -1,19 +1,5 @@
-From 904774740617ab60cdf5c38d10b0e52712f5852e Mon Sep 17 00:00:00 2001
-From: =?UTF-8?q?=E7=8E=8B=E5=AF=92=E9=B9=8F?= <wanghanpeng@51shebao.com>
-Date: Wed, 7 Jan 2026 17:25:25 +0800
-Subject: [PATCH] =?UTF-8?q?fix:=E5=86=8D=E5=8A=A0=E4=B8=80=E4=B8=AA?=
- =?UTF-8?q?=E6=B3=A8=E9=87=8A=E8=BF=9B=E8=A1=8C=E6=B5=8B=E8=AF=95?=
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
----
- langchain_code_sync/backend/app/main.py      | 1 +
- langchain_code_sync/backend/workspace/repo_b | 2 +-
- 2 files changed, 2 insertions(+), 1 deletion(-)
-
 diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
-index 9aba7ad..4248df6 100644
+index 9aba7ad88d90fca6805357ef9cf225686201df16..4248df6fbe515feaf254a19dc1f40e469042cf9f 100644
 --- a/langchain_code_sync/backend/app/main.py
 +++ b/langchain_code_sync/backend/app/main.py
 @@ -47,6 +47,7 @@ from fastapi import BackgroundTasks  # 导入后台任务
@@ -24,12 +10,3 @@ index 9aba7ad..4248df6 100644
  
  
  @app.post("/sync/start")
-diff --git a/langchain_code_sync/backend/workspace/repo_b b/langchain_code_sync/backend/workspace/repo_b
-index 2b41dd6..f14fe67 160000
---- a/langchain_code_sync/backend/workspace/repo_b
-+++ b/langchain_code_sync/backend/workspace/repo_b
-@@ -1 +1 @@
--Subproject commit 2b41dd60be79e76f8fc8f7088de6ccddb1fed7b4
-+Subproject commit f14fe67e56bc6eec756a93d3fc0c5733cb887af4
--- 
-2.39.5 (Apple Git-154)

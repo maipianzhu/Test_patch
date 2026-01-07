@@ -46,6 +46,9 @@ class ResolveRequest(BaseModel):
 from fastapi import BackgroundTasks  # 导入后台任务
 
 
+# 加点注释看一下
+
+
 @app.post("/sync/start")
 async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
     config = {"configurable": {"thread_id": req.thread_id}}

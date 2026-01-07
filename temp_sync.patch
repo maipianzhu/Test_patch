@@ -1,25 +1,29 @@
-From 8a9c86f49c916d0f12c9f4f239c1cb9c00da7505 Mon Sep 17 00:00:00 2001
+From 8317577fd9a8836d7e8233300662df542928458e Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?=E7=8E=8B=E5=AF=92=E9=B9=8F?= <wanghanpeng@51shebao.com>
-Date: Wed, 7 Jan 2026 17:06:12 +0800
-Subject: [PATCH] =?UTF-8?q?chore:=20=E5=B0=86=20workspace=20=E7=9B=AE?=
- =?UTF-8?q?=E5=BD=95=E6=B7=BB=E5=8A=A0=E5=88=B0=20.gitignore?=
+Date: Wed, 7 Jan 2026 17:12:14 +0800
+Subject: [PATCH] =?UTF-8?q?fix:=20=E6=B7=BB=E5=8A=A0=E4=B8=80=E7=82=B9?=
+ =?UTF-8?q?=E6=B3=A8=E9=87=8A=E6=B5=8B=E8=AF=95=E5=8A=9F=E8=83=BD?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
- .gitignore | 2 ++
- 1 file changed, 2 insertions(+)
+ langchain_code_sync/backend/app/main.py | 3 +++
+ 1 file changed, 3 insertions(+)
 
-diff --git a/.gitignore b/.gitignore
-index a565d37..cd664c9 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -7,3 +7,5 @@ langchain_code_sync/frontend/node_modules
- langchain_code_sync/backend/checkpoints.db
- langchain_code_sync/backend/checkpoints.db-shm
- langchain_code_sync/backend/checkpoints.db-wal
-+**/workspace/*
-+langchain_code_sync/backend/workspace/repo_b
+diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
+index 13ff05c..9aba7ad 100644
+--- a/langchain_code_sync/backend/app/main.py
++++ b/langchain_code_sync/backend/app/main.py
+@@ -46,6 +46,9 @@ class ResolveRequest(BaseModel):
+ from fastapi import BackgroundTasks  # 导入后台任务
+ 
+ 
++# 加点注释看一下
++
++
+ @app.post("/sync/start")
+ async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
+     config = {"configurable": {"thread_id": req.thread_id}}
 -- 
 2.39.5 (Apple Git-154)

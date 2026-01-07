@@ -4,35 +4,46 @@ from services.git_manager import DiscoveryManager
 
 
 def discover_origin_node(state: SyncState) -> Dict[str, Any]:
-    """
-    第一步：发现同步起点和待同步列表
-    """
-    # 实例化 service
-    dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+    # 1. 初始化临时管理器用于处理路径
+    # 注意：此时 state["repo_a_dir"] 可能是 URL
+    temp_dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
 
-    # 1. 优先尝试从元数据（.sync_metadata.json）读取上一次同步的位点
-    base_commit = dm.load_metadata()
-    log_msg = ""
+    logs = state.get("logs", [])
+    logs.append("正在准备本地工作目录...")
 
-    if not base_commit:
-        # 2. 如果是第一次同步，执行指纹对比算法搜索起点
-        # 这里可能需要一点时间
-        base_commit, score = dm.find_best_match(max_search_depth=200)
-        log_msg = (
-            f"未发现元数据，通过指纹识别起点: {base_commit[:8]} (相似度: {score:.2%})"
-        )
-    else:
-        log_msg = f"发现同步记录，起点 Commit: {base_commit[:8]}"
+    try:
+        # 2. 确保 A 和 B 都在本地
+        local_a = temp_dm.ensure_local_repo(state["repo_a_dir"], "repo_a")
+        local_b = temp_dm.ensure_local_repo(state["repo_b_dir"], "repo_b")
 
-    # 3. 计算从 base_commit 到 RepoA 最新提交之间的差异列表
-    # --reverse 确保我们是从旧到新一个一个应用补丁
-    pending_commits = dm.get_pending_commits(base_commit)
+        # 3. 重新实例化 dm 使用本地绝对路径
+        dm = DiscoveryManager(local_a, local_b)
 
-    # 4. 更新状态
-    return {
-        "base_commit": base_commit,
-        "pending_commits": pending_commits,
-        "current_commit_index": 0,
-        "status": "applying" if pending_commits else "completed",
-        "logs": state["logs"] + [log_msg, f"发现 {len(pending_commits)} 个待同步提交"],
-    }
+        # 4. 寻找起点
+        base_commit = dm.load_metadata()
+        if not base_commit:
+            logs.append("未发现同步记录，正在扫描指纹寻找起点...")
+            base_commit, score = dm.find_best_match()
+            logs.append(f"识别到虚拟祖先: {base_commit[:8]} (匹配度: {score:.2%})")
+        else:
+            logs.append(f"从元数据加载起点: {base_commit[:8]}")
+
+        # 5. 定义 pending_commits (解决你报错的关键)
+        pending_commits = dm.get_pending_commits(base_commit)
+        logs.append(f"发现 {len(pending_commits)} 个待同步提交")
+
+        # 6. 返回更新后的状态
+        return {
+            **state,
+            "repo_a_dir": local_a,  # 更新为本地路径，供后续 patching 节点使用
+            "repo_b_dir": local_b,
+            "base_commit": base_commit,
+            "pending_commits": pending_commits,
+            "current_commit_index": 0,
+            "status": "applying" if pending_commits else "completed",
+            "logs": logs,
+        }
+
+    except Exception as e:
+        logs.append(f"发现异常: {str(e)}")
+        return {**state, "status": "error", "logs": logs}

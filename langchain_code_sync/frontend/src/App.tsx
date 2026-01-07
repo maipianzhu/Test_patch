@@ -18,10 +18,13 @@ function App() {
                 try {
                     const res = await syncApi.getStatus(threadId);
                     setState(res.data);
-                    // 如果任务结束，停止轮询
-                    if (res.data.status === 'completed') setIsPolling(false);
-                } catch (e) {
-                    console.error("轮询失败", e);
+                } catch (e: any) {
+                    // 如果是 404，说明后端还没准备好 Checkpoint，忽略它
+                    if (e.response?.status === 404) {
+                        console.log("等待任务初始化...");
+                    } else {
+                        console.error("轮询出错", e);
+                    }
                 }
             }, 2000);
         }

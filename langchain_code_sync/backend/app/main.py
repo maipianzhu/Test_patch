@@ -1,4 +1,9 @@
 from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv, find_dotenv
+
+# 自动加载 .env 文件 (搜索当前及父级目录)
+load_dotenv(find_dotenv())
+
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -38,33 +43,34 @@ class ResolveRequest(BaseModel):
 # --- API 接口实现 ---
 
 
+from fastapi import BackgroundTasks  # 导入后台任务
+
+
 @app.post("/sync/start")
-async def start_sync(req: SyncRequest):
-    """
-    启动同步任务
-    """
-    # 初始化状态
+async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
+    config = {"configurable": {"thread_id": req.thread_id}}
+
     initial_state = {
         "repo_a_dir": req.repo_a_dir,
         "repo_b_dir": req.repo_b_dir,
         "current_commit_index": 0,
-        "logs": ["初始化同步任务..."],
+        "logs": ["任务已进入后台执行队列..."],
         "has_conflict": False,
         "conflicts": [],
         "status": "analyzing",
     }
 
-    # 配置 thread_id 用于持久化存储
-    config = {"configurable": {"thread_id": req.thread_id}}
+    # 定义一个后台运行的函数
+    def run_workflow():
+        try:
+            sync_graph.invoke(initial_state, config)
+        except Exception as e:
+            print(f"Workflow Error: {e}")
 
-    try:
-        # 启动 Graph（它会自动运行到第一个断点或结束）
-        # 这里使用 invoke，它会阻塞直到遇到 interrupt 或执行完毕
-        # 在实际工程中，建议使用 background_tasks 以免 HTTP 超时
-        sync_graph.invoke(initial_state, config)
-        return {"message": "任务已启动或已进入待处理状态"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # 将任务丢进后台，立即返回 HTTP 200
+    background_tasks.add_task(run_workflow)
+
+    return {"message": "Sync started in background"}
 
 
 @app.get("/sync/status")

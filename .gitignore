@@ -4,3 +4,6 @@ venv
 base-grammar
 langchain_code_sync/frontend/node_modules
 **/__pycache__
+langchain_code_sync/backend/checkpoints.db
+langchain_code_sync/backend/checkpoints.db-shm
+langchain_code_sync/backend/checkpoints.db-wal

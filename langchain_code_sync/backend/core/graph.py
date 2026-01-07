@@ -33,6 +33,8 @@ def create_sync_graph():
         """决定 apply_patch 之后去哪"""
         if state["status"] == "completed":
             return "end"
+        if state["status"] == "error":  # 增加错误处理分支
+            return "end"
         if state["has_conflict"]:
             return "conflict"
         return "next_patch"

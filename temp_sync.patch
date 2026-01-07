@@ -1,54 +1,645 @@
-From 027c3627edae1a33b74b3d3e9c187269952435af Mon Sep 17 00:00:00 2001
+From 9575789e3d74b82fc479ef9648c78f88d19a55d1 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?=E7=8E=8B=E5=AF=92=E9=B9=8F?= <wanghanpeng@51shebao.com>
-Date: Wed, 7 Jan 2026 15:17:55 +0800
-Subject: [PATCH] =?UTF-8?q?chore:=20=E5=BF=BD=E7=95=A5=20Python=20?=
- =?UTF-8?q?=E7=BC=93=E5=AD=98=E7=9B=AE=E5=BD=95?=
+Date: Wed, 7 Jan 2026 17:01:47 +0800
+Subject: [PATCH] =?UTF-8?q?feat:=20=E6=9B=B4=E6=96=B0LangChain=E5=BA=94?=
+ =?UTF-8?q?=E7=94=A8=E9=80=BB=E8=BE=91=E3=80=81UI=E7=BB=84=E4=BB=B6?=
+ =?UTF-8?q?=E5=92=8C=E5=89=8D=E7=AB=AFAPI=EF=BC=8C=E5=B9=B6=E8=B0=83?=
+ =?UTF-8?q?=E6=95=B4LLM=E6=A0=B8=E5=BF=83=E6=A8=A1=E5=9D=97=E3=80=82?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
- .gitignore                                |  1 +
- langchain_code_sync/backend/core/graph.py | 12 ++++++++++--
- 2 files changed, 11 insertions(+), 2 deletions(-)
+ .gitignore                                    |   5 +-
+ langchain_code_sync/backend/app/main.py       |  38 ++--
+ langchain_code_sync/backend/core/graph.py     |   2 +
+ .../backend/core/nodes/discovery.py           |  75 ++++---
+ .../backend/core/nodes/patching.py            |  88 +++++---
+ .../backend/services/git_manager.py           | 202 +++++++++++-------
+ langchain_code_sync/backend/workspace/repo_a  |   1 +
+ langchain_code_sync/backend/workspace/repo_b  |   1 +
+ langchain_code_sync/frontend/src/App.tsx      |  11 +-
+ 9 files changed, 258 insertions(+), 165 deletions(-)
+ create mode 160000 langchain_code_sync/backend/workspace/repo_a
+ create mode 160000 langchain_code_sync/backend/workspace/repo_b
 
 diff --git a/.gitignore b/.gitignore
-index a6fc1ab..1d204ab 100644
+index 1d204ab..a565d37 100644
 --- a/.gitignore
 +++ b/.gitignore
-@@ -3,3 +3,4 @@
+@@ -3,4 +3,7 @@
  venv
  base-grammar
  langchain_code_sync/frontend/node_modules
-+**/__pycache__
+-**/__pycache__
 \ No newline at end of file
++**/__pycache__
++langchain_code_sync/backend/checkpoints.db
++langchain_code_sync/backend/checkpoints.db-shm
++langchain_code_sync/backend/checkpoints.db-wal
+diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
+index ac2df42..13ff05c 100644
+--- a/langchain_code_sync/backend/app/main.py
++++ b/langchain_code_sync/backend/app/main.py
+@@ -1,4 +1,9 @@
+ from fastapi import FastAPI, HTTPException
++from dotenv import load_dotenv, find_dotenv
++
++# 自动加载 .env 文件 (搜索当前及父级目录)
++load_dotenv(find_dotenv())
++
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel
+ from typing import List, Optional
+@@ -38,33 +43,34 @@ class ResolveRequest(BaseModel):
+ # --- API 接口实现 ---
+ 
+ 
++from fastapi import BackgroundTasks  # 导入后台任务
++
++
+ @app.post("/sync/start")
+-async def start_sync(req: SyncRequest):
+-    """
+-    启动同步任务
+-    """
+-    # 初始化状态
++async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
++    config = {"configurable": {"thread_id": req.thread_id}}
++
+     initial_state = {
+         "repo_a_dir": req.repo_a_dir,
+         "repo_b_dir": req.repo_b_dir,
+         "current_commit_index": 0,
+-        "logs": ["初始化同步任务..."],
++        "logs": ["任务已进入后台执行队列..."],
+         "has_conflict": False,
+         "conflicts": [],
+         "status": "analyzing",
+     }
+ 
+-    # 配置 thread_id 用于持久化存储
+-    config = {"configurable": {"thread_id": req.thread_id}}
++    # 定义一个后台运行的函数
++    def run_workflow():
++        try:
++            sync_graph.invoke(initial_state, config)
++        except Exception as e:
++            print(f"Workflow Error: {e}")
++
++    # 将任务丢进后台，立即返回 HTTP 200
++    background_tasks.add_task(run_workflow)
+ 
+-    try:
+-        # 启动 Graph（它会自动运行到第一个断点或结束）
+-        # 这里使用 invoke，它会阻塞直到遇到 interrupt 或执行完毕
+-        # 在实际工程中，建议使用 background_tasks 以免 HTTP 超时
+-        sync_graph.invoke(initial_state, config)
+-        return {"message": "任务已启动或已进入待处理状态"}
+-    except Exception as e:
+-        raise HTTPException(status_code=500, detail=str(e))
++    return {"message": "Sync started in background"}
+ 
+ 
+ @app.get("/sync/status")
 diff --git a/langchain_code_sync/backend/core/graph.py b/langchain_code_sync/backend/core/graph.py
-index 18f6e12..6a7259f 100644
+index 6a7259f..8c77a27 100644
 --- a/langchain_code_sync/backend/core/graph.py
 +++ b/langchain_code_sync/backend/core/graph.py
-@@ -1,4 +1,7 @@
- from langgraph.graph import StateGraph, END
-+import sqlite3  # 导入标准库
+@@ -33,6 +33,8 @@ def create_sync_graph():
+         """决定 apply_patch 之后去哪"""
+         if state["status"] == "completed":
+             return "end"
++        if state["status"] == "error":  # 增加错误处理分支
++            return "end"
+         if state["has_conflict"]:
+             return "conflict"
+         return "next_patch"
+diff --git a/langchain_code_sync/backend/core/nodes/discovery.py b/langchain_code_sync/backend/core/nodes/discovery.py
+index 755b85b..4cbd4b7 100644
+--- a/langchain_code_sync/backend/core/nodes/discovery.py
++++ b/langchain_code_sync/backend/core/nodes/discovery.py
+@@ -4,35 +4,46 @@ from services.git_manager import DiscoveryManager
+ 
+ 
+ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
+-    """
+-    第一步：发现同步起点和待同步列表
+-    """
+-    # 实例化 service
+-    dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+-
+-    # 1. 优先尝试从元数据（.sync_metadata.json）读取上一次同步的位点
+-    base_commit = dm.load_metadata()
+-    log_msg = ""
+-
+-    if not base_commit:
+-        # 2. 如果是第一次同步，执行指纹对比算法搜索起点
+-        # 这里可能需要一点时间
+-        base_commit, score = dm.find_best_match(max_search_depth=200)
+-        log_msg = (
+-            f"未发现元数据，通过指纹识别起点: {base_commit[:8]} (相似度: {score:.2%})"
+-        )
+-    else:
+-        log_msg = f"发现同步记录，起点 Commit: {base_commit[:8]}"
+-
+-    # 3. 计算从 base_commit 到 RepoA 最新提交之间的差异列表
+-    # --reverse 确保我们是从旧到新一个一个应用补丁
+-    pending_commits = dm.get_pending_commits(base_commit)
+-
+-    # 4. 更新状态
+-    return {
+-        "base_commit": base_commit,
+-        "pending_commits": pending_commits,
+-        "current_commit_index": 0,
+-        "status": "applying" if pending_commits else "completed",
+-        "logs": state["logs"] + [log_msg, f"发现 {len(pending_commits)} 个待同步提交"],
+-    }
++    # 1. 初始化临时管理器用于处理路径
++    # 注意：此时 state["repo_a_dir"] 可能是 URL
++    temp_dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
 +
-+# 确保你的代码是这样写的（通常不需要修改，安装完包后即可识别）
- from langgraph.checkpoint.sqlite import SqliteSaver
- 
- # 导入节点函数
-@@ -51,8 +54,13 @@ def create_sync_graph():
-     workflow.add_edge("human_review", "apply_patch")
- 
-     # 8. 【工程核心】配置持久化存储和中断点
--    # 使用 SQLite 记录每一时刻的状态，支持服务器重启后恢复
--    memory = SqliteSaver.from_conn_string("checkpoints.db")
-+    # 1. 手动创建 sqlite3 连接
-+    # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
-+    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
++    logs = state.get("logs", [])
++    logs.append("正在准备本地工作目录...")
 +
-+    # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
-+    memory = SqliteSaver(conn)
-+    # ----------------
++    try:
++        # 2. 确保 A 和 B 都在本地
++        local_a = temp_dm.ensure_local_repo(state["repo_a_dir"], "repo_a")
++        local_b = temp_dm.ensure_local_repo(state["repo_b_dir"], "repo_b")
++
++        # 3. 重新实例化 dm 使用本地绝对路径
++        dm = DiscoveryManager(local_a, local_b)
++
++        # 4. 寻找起点
++        base_commit = dm.load_metadata()
++        if not base_commit:
++            logs.append("未发现同步记录，正在扫描指纹寻找起点...")
++            base_commit, score = dm.find_best_match()
++            logs.append(f"识别到虚拟祖先: {base_commit[:8]} (匹配度: {score:.2%})")
++        else:
++            logs.append(f"从元数据加载起点: {base_commit[:8]}")
++
++        # 5. 定义 pending_commits (解决你报错的关键)
++        pending_commits = dm.get_pending_commits(base_commit)
++        logs.append(f"发现 {len(pending_commits)} 个待同步提交")
++
++        # 6. 返回更新后的状态
++        return {
++            **state,
++            "repo_a_dir": local_a,  # 更新为本地路径，供后续 patching 节点使用
++            "repo_b_dir": local_b,
++            "base_commit": base_commit,
++            "pending_commits": pending_commits,
++            "current_commit_index": 0,
++            "status": "applying" if pending_commits else "completed",
++            "logs": logs,
++        }
++
++    except Exception as e:
++        logs.append(f"发现异常: {str(e)}")
++        return {**state, "status": "error", "logs": logs}
+diff --git a/langchain_code_sync/backend/core/nodes/patching.py b/langchain_code_sync/backend/core/nodes/patching.py
+index 1a40eac..b15f674 100644
+--- a/langchain_code_sync/backend/core/nodes/patching.py
++++ b/langchain_code_sync/backend/core/nodes/patching.py
+@@ -1,64 +1,88 @@
+ from typing import Any, Dict
+ from core.state import SyncState
++
++# 关键：统一在顶部导入
+ from services.git_manager import PatchManager, DiscoveryManager
  
-     # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
-     app = workflow.compile(checkpointer=memory, interrupt_before=["human_review"])
+ 
+ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
+-    """
+-    核心循环：尝试应用当前索引指向的补丁
+-    """
+-    # 检查是否已经处理完所有补丁
+     idx = state["current_commit_index"]
+     if idx >= len(state["pending_commits"]):
+-        return {"status": "completed"}
++        pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
++        try:
++            state["logs"].append("正在同步到远程仓库 (Pushing)...")
++            pm.push_to_remote()
++            return {
++                **state,
++                "status": "completed",
++                "logs": state["logs"] + ["🚀 所有补丁已同步并推送到远程仓库！"],
++            }
++        except Exception as e:
++            return {
++                **state,
++                "status": "error",
++                "logs": state["logs"] + [f"❌ 代码已在本地同步，但推送失败: {str(e)}"],
++            }
+ 
+-    # 初始化 Service
++    # 使用已经导入的 PatchManager
+     pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
+-    dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+-
+     current_cid = state["pending_commits"][idx]
+ 
+-    # 1. 生成补丁内容
+-    patch_content = pm.generate_patch(current_cid)
++    # 1. 获取原提交信息
++    metadata = pm.get_commit_metadata(current_cid)
+ 
+-    # 2. 尝试应用补丁 (内部执行 git apply --3way)
+-    success = pm.apply_patch_attempt(patch_content)
++    # 2. 生成并尝试应用补丁
++    patch_content = pm.generate_patch(current_cid)
++    success, error_log = pm.apply_patch_attempt(patch_content)
+ 
+     if success:
+-        # 情况 A: 应用成功
+-        # 自动执行 git add/commit 并更新元数据
+-        pm.commit_applied_patch(current_cid)
+-        dm.save_metadata(current_cid)  # 更新 B 库中的同步标记
++        # 3. 提交代码并保留作者历史
++        pm.commit_with_metadata(metadata)
++
++        # 4. 更新元数据 (使用顶部导入的 DiscoveryManager)
++        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
++        dm.save_metadata(current_cid)
+ 
+         return {
++            **state,
+             "current_commit_index": idx + 1,
+             "has_conflict": False,
+             "status": "applying",
+-            "logs": state["logs"] + [f"成功应用补丁: {current_cid[:8]}"],
++            "logs": state["logs"] + [f"✅ 同步完成: {metadata['message'][:40]}..."],
+         }
+     else:
+-        # 情况 B: 发生冲突
+-        # 1. 获取所有冲突文件
++        # 5. 冲突处理逻辑
+         conflict_files = pm.get_conflict_files()
+ 
+-        # 2. 提取每个冲突文件的 Stage 1, 2, 3 内容 (Base, Ours, Theirs)
+-        conflict_details = []
+-        for file_path in conflict_files:
+-            contents = pm.get_three_way_content(file_path)
+-            conflict_details.append(
++        # 如果 apply 失败了，但 git 并没有在索引中生成未合并文件
++        if not conflict_files:
++            # 打印前 10 行补丁内容，检查文件路径是否正确
++            print(f"DEBUG: Patch Head -> {patch_content[:500]}")
++            return {
++                **state,
++                "status": "error",
++                "logs": state["logs"]
++                + [f"❌ 补丁应用彻底失败（无法自动处理）: {error_log[:200]}"],
++            }
++
++        # 提取冲突内容供 UI 显示
++        all_conflicts = []
++        for f_path in conflict_files:
++            three_way = pm.get_three_way_content(f_path)
++            all_conflicts.append(
+                 {
+-                    "file_path": file_path,
+-                    "base_content": contents["base"],
+-                    "ours_content": contents["ours"],
+-                    "theirs_content": contents["theirs"],
+-                    "ai_suggestion": None,  # 留给下一个节点 ai_resolve 处理
++                    "file_path": f_path,
++                    "base_content": three_way["base"],
++                    "ours_content": three_way["ours"],
++                    "theirs_content": three_way["theirs"],
++                    "ai_suggestion": None,
+                 }
+             )
+ 
+         return {
++            **state,
+             "has_conflict": True,
+-            "conflicts": conflict_details,
++            "conflicts": all_conflicts,
+             "status": "conflicted",
+-            "logs": state["logs"]
+-            + [f"补丁冲突: {current_cid[:8]}，涉及 {len(conflict_files)} 个文件"],
++            "logs": state["logs"] + [f"🚧 冲突发生: {current_cid[:8]}，请人工裁决"],
+         }
+diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
+index 66b08c6..1ea25fd 100644
+--- a/langchain_code_sync/backend/services/git_manager.py
++++ b/langchain_code_sync/backend/services/git_manager.py
+@@ -8,137 +8,126 @@ class DiscoveryManager:
+     def __init__(self, repo_a_dir: str, repo_b_dir: str):
+         self.repo_a_dir = repo_a_dir
+         self.repo_b_dir = repo_b_dir
++        # 元数据存放在 RepoB 的根目录下
+         self.metadata_path = os.path.join(repo_b_dir, ".sync_metadata.json")
+ 
+     def run_git(self, args: List[str], cwd: str) -> str:
+-        """运行 Git 命令并返回输出"""
+         result = subprocess.run(
+             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
+         )
+         if result.returncode != 0:
+-            raise Exception(f"Git command failed: {result.stderr}")
++            return ""  # 或者抛出异常，视情况而定
+         return result.stdout.strip()
+ 
++    def ensure_local_repo(self, path_or_url: str, name: str) -> str:
++        """确保仓库在本地，如果是 URL 则克隆"""
++        if path_or_url.startswith(("http", "git@")):
++            workspace = os.path.abspath("workspace")
++            os.makedirs(workspace, exist_ok=True)
++            local_path = os.path.join(workspace, name)
++
++            if not os.path.exists(local_path):
++                print(f"Cloning {name}...")
++                subprocess.run(["git", "clone", path_or_url, local_path], check=True)
++            else:
++                print(f"Updating {name}...")
++                subprocess.run(["git", "fetch", "--all"], cwd=local_path, check=True)
++            return local_path
++        return os.path.abspath(path_or_url)
++
+     def get_fingerprint(self, cwd: str, commit_ish: str = "HEAD") -> Dict[str, str]:
+-        """
+-        获取指纹：返回 {文件路径: 内容Hash}
+-        使用 ls-tree 可以极快地获取所有受 Git 管理的文件的 Blob ID
+-        """
+         output = self.run_git(["ls-tree", "-r", commit_ish], cwd)
+         fingerprint = {}
+         for line in output.splitlines():
+-            if not line:
+-                continue
+-            # ls-tree 输出格式: 100644 blob <hash>    <path>
+             parts = line.split(maxsplit=3)
+             if len(parts) >= 4:
+-                blob_hash = parts[2]
+-                file_path = parts[3]
+-                fingerprint[file_path] = blob_hash
++                fingerprint[parts[3]] = parts[2]
+         return fingerprint
+ 
+-    def load_metadata(self) -> Optional[str]:
+-        """从 RepoB 读取上一次同步的 Commit ID"""
+-        if os.path.exists(self.metadata_path):
+-            try:
+-                with open(self.metadata_path, "r") as f:
+-                    data = json.load(f)
+-                    return data.get("last_synced_commit_repo_a")
+-            except:
+-                return None
+-        return None
+-
+-    def save_metadata(self, commit_id: str):
+-        """保存同步进度"""
+-        with open(self.metadata_path, "w") as f:
+-            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
+-
+     def find_best_match(self, max_search_depth: int = 100) -> Tuple[str, float]:
+-        """
+-        核心算法：在 RepoA 中寻找最像 RepoB 当前状态的 Commit
+-        """
+-        # 1. 获取 RepoB 的当前指纹
+-        target_fingerprint = self.get_fingerprint(self.repo_b_dir)
+-        target_files_count = len(target_fingerprint)
+-
+-        if target_files_count == 0:
+-            raise Exception("RepoB is empty or not a git repo.")
++        target_fp = self.get_fingerprint(self.repo_b_dir)
++        if not target_fp:
++            return "", 0.0
+ 
+-        # 2. 获取 RepoA 最近的提交列表
+         commits = self.run_git(
+             ["rev-list", "HEAD", f"--max-count={max_search_depth}"], self.repo_a_dir
+         ).splitlines()
+-
+-        best_commit = ""
+-        max_score = -1.0
+-
+-        print(f"开始指纹比对，搜索深度: {len(commits)}...")
++        best_commit, max_score = "", -1.0
+ 
+         for cid in commits:
+-            current_a_fingerprint = self.get_fingerprint(self.repo_a_dir, cid)
+-
+-            # 计算匹配得分：路径一致且 Hash 一致的文件数
+-            matches = sum(
+-                1
+-                for path, h in target_fingerprint.items()
+-                if current_a_fingerprint.get(path) == h
+-            )
+-
+-            score = matches / target_files_count
+-
+-            # 只要达到 100% 匹配，立即停止搜索
++            a_fp = self.get_fingerprint(self.repo_a_dir, cid)
++            matches = sum(1 for p, h in target_fp.items() if a_fp.get(p) == h)
++            score = matches / len(target_fp)
+             if score >= 1.0:
+                 return cid, 1.0
+-
+             if score > max_score:
+-                max_score = score
+-                best_commit = cid
+-
++                max_score, best_commit = score, cid
+         return best_commit, max_score
+ 
++    def load_metadata(self) -> Optional[str]:
++        if os.path.exists(self.metadata_path):
++            with open(self.metadata_path, "r") as f:
++                return json.load(f).get("last_synced_commit_repo_a")
++        return None
++
++    def save_metadata(self, commit_id: str):
++        with open(self.metadata_path, "w") as f:
++            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
++
++    def get_pending_commits(self, base_commit: str) -> List[str]:
++        """获取从 base 到最新的所有 commit id"""
++        output = self.run_git(
++            ["rev-list", f"{base_commit}..HEAD", "--reverse"], self.repo_a_dir
++        )
++        return output.splitlines() if output else []
++
+ 
+ class PatchManager:
+     def __init__(self, repo_a_dir: str, repo_b_dir: str):
+         self.repo_a_dir = repo_a_dir
+         self.repo_b_dir = repo_b_dir
+ 
+-    def _run_git(self, args: List[str], cwd: str) -> str:
++    def run_git(self, args: List[str], cwd: str) -> str:
+         result = subprocess.run(
+             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
+         )
+         return result.stdout.strip()
+ 
+     def generate_patch(self, commit_id: str) -> str:
+-        """在 RepoA 中为特定 commit 生成补丁内容"""
+-        # 使用 -1 保证只生成这一个 commit 的补丁
+-        return self._run_git(["show", commit_id, "--patch"], self.repo_a_dir)
++        """
++        使用 format-patch 生成标准补丁，它包含完整的元数据和差异
++        """
++        # --stdout 将补丁输出到字符串
++        # -1 表示针对这一个 commit
++        return self.run_git(
++            ["format-patch", "-1", "--stdout", commit_id], self.repo_a_dir
++        )
+ 
+-    def apply_patch_attempt(self, patch_content: str) -> bool:
+-        """尝试在 RepoB 应用补丁"""
+-        # 将补丁写入临时文件
++    def apply_patch_attempt(self, patch_content: str) -> Tuple[bool, str]:
+         patch_path = os.path.join(self.repo_b_dir, "temp_sync.patch")
+-        with open(patch_path, "w") as f:
++        with open(patch_path, "w", encoding="utf-8", newline="\n") as f:
+             f.write(patch_content)
+ 
+         try:
+-            # 尝试使用 git am -3 (三路合并模式)
+-            # 如果没有共同历史，可以使用 git apply --3way
++            # --- 关键修改：更宽容的参数 ---
++            # --3way: 允许三路合并
++            # --whitespace=nowarn: 忽略行尾空格报错（解决你的报错的关键）
++            # --reject: 如果补丁应用失败，强制生成 .rej 文件（这能保证我们拿到冲突信息）
+             subprocess.run(
+-                ["git", "apply", "--3way", "temp_sync.patch"],
++                ["git", "apply", "--3way", "--whitespace=nowarn", "temp_sync.patch"],
+                 cwd=self.repo_b_dir,
+-                check=True,
+                 capture_output=True,
++                text=True,
++                check=True,
+             )
+-            return True
+-        except subprocess.CalledProcessError:
+-            return False
+-        finally:
+-            if os.path.exists(patch_path):
+-                os.remove(patch_path)
++            return True, ""
++        except subprocess.CalledProcessError as e:
++            # 即便报错，我们也检查一下是否有文件冲突（git 可能会部分应用）
++            return False, e.stderr
+ 
+     def get_conflict_files(self) -> List[str]:
+         """获取当前冲突的文件列表"""
+-        output = self._run_git(
++        output = self.run_git(
+             ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
+         )
+         return output.splitlines()
+@@ -154,7 +143,7 @@ class PatchManager:
+         for stage, label in [("1", "base"), ("2", "ours"), ("3", "theirs")]:
+             try:
+                 # git show :stage:path 获取特定阶段的文件内容
+-                content = self._run_git(
++                content = self.run_git(
+                     ["show", f":{stage}:{file_path}"], self.repo_b_dir
+                 )
+                 contents[label] = content
+@@ -171,9 +160,62 @@ class PatchManager:
+             f.write(final_content)
+ 
+         # 必须执行 git add，告诉 git 冲突已解决
+-        self._run_git(["add", file_path], self.repo_b_dir)
++        self.run_git(["add", file_path], self.repo_b_dir)
+ 
+     def is_all_resolved(self) -> bool:
+         """检查是否所有冲突都已 add"""
+         conflicts = self.get_conflict_files()
+         return len(conflicts) == 0
++
++    def get_commit_metadata(self, commit_id: str) -> Dict[str, str]:
++        """
++        从 RepoA 获取该提交的作者、邮箱和描述信息
++        """
++        # %an: 作者名, %ae: 邮箱, %s: 主题, %b: 正文
++        author_name = self.run_git(
++            ["log", "-1", "--format=%an", commit_id], self.repo_a_dir
++        )
++        author_email = self.run_git(
++            ["log", "-1", "--format=%ae", commit_id], self.repo_a_dir
++        )
++        subject = self.run_git(["log", "-1", "--format=%s", commit_id], self.repo_a_dir)
++        body = self.run_git(["log", "-1", "--format=%b", commit_id], self.repo_a_dir)
++
++        return {
++            "author": f"{author_name} <{author_email}>",
++            "message": f"{subject}\n\n{body}".strip(),
++        }
++
++    def commit_with_metadata(self, metadata: Dict[str, str]):
++        """
++        在 RepoB 中使用指定的元数据提交代码
++        """
++        # 1. 先 git add
++        self.run_git(["add", "."], self.repo_b_dir)
++
++        # 2. 构造 commit 命令，指定作者
++        # --author="Name <email>" 可以伪造/还原原作者
++        cmd = [
++            "commit",
++            f"--author={metadata['author']}",
++            "-m",
++            metadata["message"],
++            "--no-verify",  # 跳过可能的 pre-commit hook
++        ]
++        self.run_git(cmd, self.repo_b_dir)
++
++    def push_to_remote(self):
++        """
++        将本地工作区的改动推送到远程仓库
++        """
++        # 这里的 origin 是 git clone 时默认建立的远程引用
++        # HEAD 代表推送当前分支
++        result = subprocess.run(
++            ["git", "push", "origin", "HEAD"],
++            cwd=self.repo_b_dir,
++            capture_output=True,
++            text=True,
++        )
++        if result.returncode != 0:
++            raise Exception(f"推送远程仓库失败: {result.stderr}")
++        return result.stdout
+diff --git a/langchain_code_sync/backend/workspace/repo_a b/langchain_code_sync/backend/workspace/repo_a
+new file mode 160000
+index 0000000..027c362
+--- /dev/null
++++ b/langchain_code_sync/backend/workspace/repo_a
+@@ -0,0 +1 @@
++Subproject commit 027c3627edae1a33b74b3d3e9c187269952435af
+diff --git a/langchain_code_sync/backend/workspace/repo_b b/langchain_code_sync/backend/workspace/repo_b
+new file mode 160000
+index 0000000..2b41dd6
+--- /dev/null
++++ b/langchain_code_sync/backend/workspace/repo_b
+@@ -0,0 +1 @@
++Subproject commit 2b41dd60be79e76f8fc8f7088de6ccddb1fed7b4
+diff --git a/langchain_code_sync/frontend/src/App.tsx b/langchain_code_sync/frontend/src/App.tsx
+index 8440394..a084510 100644
+--- a/langchain_code_sync/frontend/src/App.tsx
++++ b/langchain_code_sync/frontend/src/App.tsx
+@@ -18,10 +18,13 @@ function App() {
+                 try {
+                     const res = await syncApi.getStatus(threadId);
+                     setState(res.data);
+-                    // 如果任务结束，停止轮询
+-                    if (res.data.status === 'completed') setIsPolling(false);
+-                } catch (e) {
+-                    console.error("轮询失败", e);
++                } catch (e: any) {
++                    // 如果是 404，说明后端还没准备好 Checkpoint，忽略它
++                    if (e.response?.status === 404) {
++                        console.log("等待任务初始化...");
++                    } else {
++                        console.error("轮询出错", e);
++                    }
+                 }
+             }, 2000);
+         }
 -- 
 2.39.5 (Apple Git-154)

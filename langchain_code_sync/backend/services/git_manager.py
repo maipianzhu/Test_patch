@@ -75,9 +75,19 @@ class DiscoveryManager:
             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
 
     def get_pending_commits(self, base_commit: str) -> List[str]:
-        """获取从 base 到最新的所有 commit id"""
+        """
+        获取从 base 到 远程最新提交 之间的所有 commit id
+        """
+        # 1. 首先确保本地已经拿到了远程的最新的提交信息
+        self.run_git(["fetch", "origin"], self.repo_a_dir)
+
+        # 2. 对比时，使用 origin/main (或者你指定的远程分支名) 而不是 HEAD
+        # 这样才能发现你在 GitHub 上新提交的代码
+        remote_branch = "origin/main"  # 假设主分支是 main
+
         output = self.run_git(
-            ["rev-list", f"{base_commit}..HEAD", "--reverse"], self.repo_a_dir
+            ["rev-list", f"{base_commit}..{remote_branch}", "--reverse"],
+            self.repo_a_dir,
         )
         return output.splitlines() if output else []
 

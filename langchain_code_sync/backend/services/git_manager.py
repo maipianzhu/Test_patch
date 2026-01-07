@@ -32,7 +32,12 @@ class DiscoveryManager:
                 os.makedirs(workspace, exist_ok=True)
 
             local_path = os.path.join(workspace, name)
-            # ... 剩下的克隆/更新逻辑不变 ...
+            if not os.path.exists(local_path):
+                print(f"Cloning {name}...")
+                subprocess.run(["git", "clone", path_or_url, local_path], check=True)
+            else:
+                print(f"Updating {name}...")
+                subprocess.run(["git", "fetch", "--all"], cwd=local_path, check=True)
             return local_path
         return os.path.abspath(path_or_url)
 

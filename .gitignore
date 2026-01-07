@@ -9,3 +9,6 @@ langchain_code_sync/backend/checkpoints.db-shm
 langchain_code_sync/backend/checkpoints.db-wal
 **/workspace/*
 langchain_code_sync/backend/workspace/repo_b
+workspace/
+checkpoints.db
+.sync_metadata.json

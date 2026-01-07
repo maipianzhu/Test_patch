@@ -58,6 +58,7 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
         if not conflict_files:
             # 打印前 10 行补丁内容，检查文件路径是否正确
             print(f"DEBUG: Patch Head -> {patch_content[:500]}")
+            print(f"DEBUG: Error Log -> {error_log}")
             return {
                 **state,
                 "status": "error",

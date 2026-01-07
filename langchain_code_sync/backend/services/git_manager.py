@@ -20,18 +20,19 @@ class DiscoveryManager:
         return result.stdout.strip()
 
     def ensure_local_repo(self, path_or_url: str, name: str) -> str:
-        """确保仓库在本地，如果是 URL 则克隆"""
         if path_or_url.startswith(("http", "git@")):
-            workspace = os.path.abspath("workspace")
-            os.makedirs(workspace, exist_ok=True)
-            local_path = os.path.join(workspace, name)
+            # --- 方案 A: 放在系统临时目录 (重启电脑可能丢失) ---
+            # workspace = os.path.join(tempfile.gettempdir(), "git_sync_agent")
 
-            if not os.path.exists(local_path):
-                print(f"Cloning {name}...")
-                subprocess.run(["git", "clone", path_or_url, local_path], check=True)
-            else:
-                print(f"Updating {name}...")
-                subprocess.run(["git", "fetch", "--all"], cwd=local_path, check=True)
+            # --- 方案 B: 放在用户家目录下 (推荐，稳定且不干扰项目) ---
+            home = os.path.expanduser("~")
+            workspace = os.path.join(home, ".git_sync_agent_workspace")
+
+            if not os.path.exists(workspace):
+                os.makedirs(workspace, exist_ok=True)
+
+            local_path = os.path.join(workspace, name)
+            # ... 剩下的克隆/更新逻辑不变 ...
             return local_path
         return os.path.abspath(path_or_url)
 

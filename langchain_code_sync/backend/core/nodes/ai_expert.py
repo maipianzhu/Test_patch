@@ -1,16 +1,19 @@
 from typing import Any, Dict, List
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from core.state import SyncState, ConflictDetail
+from langchain_deepseek import ChatDeepSeek
+import os
 
 
 def ai_resolve_node(state: SyncState) -> Dict[str, Any]:
     """
     AI 决策节点：尝试自动解决冲突或生成建议
     """
-    # 1. 初始化大模型 (建议使用 GPT-4o 或 Claude 3.5 Sonnet，处理代码效果更好)
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    # 1. 初始化大模型
+    llm = ChatDeepSeek(
+        model="deepseek-chat", temperature=0, api_key=os.getenv("DEEPSEEK_API_KEY")
+    )
 
     updated_conflicts = []
     resolved_count = 0
@@ -47,7 +50,7 @@ def ai_resolve_node(state: SyncState) -> Dict[str, Any]:
     }
 
 
-def _ask_ai_to_merge(llm: ChatOpenAI, conflict: ConflictDetail) -> Dict:
+def _ask_ai_to_merge(llm: ChatDeepSeek, conflict: ConflictDetail) -> Dict:
     """
     私有方法：构造 Prompt 并调用 LLM
     """

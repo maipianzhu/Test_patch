@@ -1,41 +1,35 @@
-From 9e4421ca53ec05de61df0da3123ab3b3af73a28f Mon Sep 17 00:00:00 2001
+From 904774740617ab60cdf5c38d10b0e52712f5852e Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?=E7=8E=8B=E5=AF=92=E9=B9=8F?= <wanghanpeng@51shebao.com>
-Date: Wed, 7 Jan 2026 17:19:33 +0800
-Subject: [PATCH] =?UTF-8?q?feat:=20=E6=9B=B4=E6=96=B0=20Git=20=E7=AE=A1?=
- =?UTF-8?q?=E7=90=86=E6=9C=8D=E5=8A=A1=E5=8A=9F=E8=83=BD?=
+Date: Wed, 7 Jan 2026 17:25:25 +0800
+Subject: [PATCH] =?UTF-8?q?fix:=E5=86=8D=E5=8A=A0=E4=B8=80=E4=B8=AA?=
+ =?UTF-8?q?=E6=B3=A8=E9=87=8A=E8=BF=9B=E8=A1=8C=E6=B5=8B=E8=AF=95?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
- .../backend/services/git_manager.py                | 14 ++++++++++++--
- 1 file changed, 12 insertions(+), 2 deletions(-)
+ langchain_code_sync/backend/app/main.py      | 1 +
+ langchain_code_sync/backend/workspace/repo_b | 2 +-
+ 2 files changed, 2 insertions(+), 1 deletion(-)
 
-diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index 1ea25fd..3dcd716 100644
---- a/langchain_code_sync/backend/services/git_manager.py
-+++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -75,9 +75,19 @@ class DiscoveryManager:
-             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
+diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
+index 9aba7ad..4248df6 100644
+--- a/langchain_code_sync/backend/app/main.py
++++ b/langchain_code_sync/backend/app/main.py
+@@ -47,6 +47,7 @@ from fastapi import BackgroundTasks  # 导入后台任务
  
-     def get_pending_commits(self, base_commit: str) -> List[str]:
--        """获取从 base 到最新的所有 commit id"""
-+        """
-+        获取从 base 到 远程最新提交 之间的所有 commit id
-+        """
-+        # 1. 首先确保本地已经拿到了远程的最新的提交信息
-+        self.run_git(["fetch", "origin"], self.repo_a_dir)
-+
-+        # 2. 对比时，使用 origin/main (或者你指定的远程分支名) 而不是 HEAD
-+        # 这样才能发现你在 GitHub 上新提交的代码
-+        remote_branch = "origin/main"  # 假设主分支是 main
-+
-         output = self.run_git(
--            ["rev-list", f"{base_commit}..HEAD", "--reverse"], self.repo_a_dir
-+            ["rev-list", f"{base_commit}..{remote_branch}", "--reverse"],
-+            self.repo_a_dir,
-         )
-         return output.splitlines() if output else []
  
+ # 加点注释看一下
++# 再加一些注释测试一下呢
+ 
+ 
+ @app.post("/sync/start")
+diff --git a/langchain_code_sync/backend/workspace/repo_b b/langchain_code_sync/backend/workspace/repo_b
+index 2b41dd6..f14fe67 160000
+--- a/langchain_code_sync/backend/workspace/repo_b
++++ b/langchain_code_sync/backend/workspace/repo_b
+@@ -1 +1 @@
+-Subproject commit 2b41dd60be79e76f8fc8f7088de6ccddb1fed7b4
++Subproject commit f14fe67e56bc6eec756a93d3fc0c5733cb887af4
 -- 
 2.39.5 (Apple Git-154)

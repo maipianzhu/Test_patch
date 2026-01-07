@@ -2,3 +2,4 @@
 ./venv
 venv
 base-grammar
+langchain_code_sync/frontend/node_modules

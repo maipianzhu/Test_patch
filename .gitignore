@@ -3,3 +3,4 @@
 venv
 base-grammar
 langchain_code_sync/frontend/node_modules
+**/__pycache__

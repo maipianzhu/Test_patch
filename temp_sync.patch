@@ -1,51 +1,54 @@
-From 0048d19d3d0c16b8a22e5b11692ca52610189e8b Mon Sep 17 00:00:00 2001
+From 027c3627edae1a33b74b3d3e9c187269952435af Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?=E7=8E=8B=E5=AF=92=E9=B9=8F?= <wanghanpeng@51shebao.com>
-Date: Wed, 7 Jan 2026 15:03:39 +0800
-Subject: [PATCH] =?UTF-8?q?feat:=20=E6=9B=B4=E6=96=B0=20AI=20=E4=B8=93?=
- =?UTF-8?q?=E5=AE=B6=E8=8A=82=E7=82=B9=E9=80=BB=E8=BE=91?=
+Date: Wed, 7 Jan 2026 15:17:55 +0800
+Subject: [PATCH] =?UTF-8?q?chore:=20=E5=BF=BD=E7=95=A5=20Python=20?=
+ =?UTF-8?q?=E7=BC=93=E5=AD=98=E7=9B=AE=E5=BD=95?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 ---
- langchain_code_sync/backend/core/nodes/ai_expert.py | 11 +++++++----
- 1 file changed, 7 insertions(+), 4 deletions(-)
+ .gitignore                                |  1 +
+ langchain_code_sync/backend/core/graph.py | 12 ++++++++++--
+ 2 files changed, 11 insertions(+), 2 deletions(-)
 
-diff --git a/langchain_code_sync/backend/core/nodes/ai_expert.py b/langchain_code_sync/backend/core/nodes/ai_expert.py
-index dfc0c48..6bf53c9 100644
---- a/langchain_code_sync/backend/core/nodes/ai_expert.py
-+++ b/langchain_code_sync/backend/core/nodes/ai_expert.py
-@@ -1,16 +1,19 @@
- from typing import Any, Dict, List
--from langchain_openai import ChatOpenAI
- from langchain_core.prompts import ChatPromptTemplate
- from langchain_core.output_parsers import JsonOutputParser
- from core.state import SyncState, ConflictDetail
-+from langchain_deepseek import ChatDeepSeek
-+import os
+diff --git a/.gitignore b/.gitignore
+index a6fc1ab..1d204ab 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -3,3 +3,4 @@
+ venv
+ base-grammar
+ langchain_code_sync/frontend/node_modules
++**/__pycache__
+\ No newline at end of file
+diff --git a/langchain_code_sync/backend/core/graph.py b/langchain_code_sync/backend/core/graph.py
+index 18f6e12..6a7259f 100644
+--- a/langchain_code_sync/backend/core/graph.py
++++ b/langchain_code_sync/backend/core/graph.py
+@@ -1,4 +1,7 @@
+ from langgraph.graph import StateGraph, END
++import sqlite3  # 导入标准库
++
++# 确保你的代码是这样写的（通常不需要修改，安装完包后即可识别）
+ from langgraph.checkpoint.sqlite import SqliteSaver
  
+ # 导入节点函数
+@@ -51,8 +54,13 @@ def create_sync_graph():
+     workflow.add_edge("human_review", "apply_patch")
  
- def ai_resolve_node(state: SyncState) -> Dict[str, Any]:
-     """
-     AI 决策节点：尝试自动解决冲突或生成建议
-     """
--    # 1. 初始化大模型 (建议使用 GPT-4o 或 Claude 3.5 Sonnet，处理代码效果更好)
--    llm = ChatOpenAI(model="gpt-4o", temperature=0)
-+    # 1. 初始化大模型
-+    llm = ChatDeepSeek(
-+        model="deepseek-chat", temperature=0, api_key=os.getenv("DEEPSEEK_API_KEY")
-+    )
+     # 8. 【工程核心】配置持久化存储和中断点
+-    # 使用 SQLite 记录每一时刻的状态，支持服务器重启后恢复
+-    memory = SqliteSaver.from_conn_string("checkpoints.db")
++    # 1. 手动创建 sqlite3 连接
++    # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
++    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
++
++    # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
++    memory = SqliteSaver(conn)
++    # ----------------
  
-     updated_conflicts = []
-     resolved_count = 0
-@@ -47,7 +50,7 @@ def ai_resolve_node(state: SyncState) -> Dict[str, Any]:
-     }
- 
- 
--def _ask_ai_to_merge(llm: ChatOpenAI, conflict: ConflictDetail) -> Dict:
-+def _ask_ai_to_merge(llm: ChatDeepSeek, conflict: ConflictDetail) -> Dict:
-     """
-     私有方法：构造 Prompt 并调用 LLM
-     """
+     # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
+     app = workflow.compile(checkpointer=memory, interrupt_before=["human_review"])
 -- 
 2.39.5 (Apple Git-154)

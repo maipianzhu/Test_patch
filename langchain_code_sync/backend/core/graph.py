@@ -1,4 +1,7 @@
 from langgraph.graph import StateGraph, END
+import sqlite3  # 导入标准库
+
+# 确保你的代码是这样写的（通常不需要修改，安装完包后即可识别）
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 # 导入节点函数
@@ -51,8 +54,13 @@ def create_sync_graph():
     workflow.add_edge("human_review", "apply_patch")
 
     # 8. 【工程核心】配置持久化存储和中断点
-    # 使用 SQLite 记录每一时刻的状态，支持服务器重启后恢复
-    memory = SqliteSaver.from_conn_string("checkpoints.db")
+    # 1. 手动创建 sqlite3 连接
+    # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
+    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+
+    # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
+    memory = SqliteSaver(conn)
+    # ----------------
 
     # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
     app = workflow.compile(checkpointer=memory, interrupt_before=["human_review"])

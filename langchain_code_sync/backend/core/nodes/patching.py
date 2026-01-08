@@ -9,39 +9,51 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
     idx = state["current_commit_index"]
     pending = state["pending_commits"]
 
-    # --- 情况 1：所有补丁已处理完 ---
+    # --- 1. 立即初始化所有 Manager，确保任何分支都能访问 ---
+    pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
+    dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+    # 确保 dm 内部的元数据路径已经更新为物理路径
+    dm._update_paths(state["repo_a_dir"], state["repo_b_dir"])
+
+    # --- 2. 检查任务是否已经完成 ---
     if idx >= len(pending):
-        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+        try:
+            # 获取 Repo A 真正的远程 HEAD (311eb8d)
+            latest_a_id = dm.get_remote_head()
+            # 保存到指纹文件，确保下次同步对齐
+            dm.save_metadata(latest_a_id)
 
-        # 【核心修改】保存 Repo A 此时真正的远程最新 ID (311eb8d)
-        latest_a_id = dm.get_remote_head()
-        dm.save_metadata(latest_a_id)
+            # 推送到远程 Repo B
+            pm.push_to_remote()
 
-        # 执行 Push
-        pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
-        pm.push_to_remote()
+            return {
+                **state,
+                "status": "completed",
+                "logs": state["logs"]
+                + [f"🚀 所有补丁同步完成，终点对齐至: {latest_a_id[:8]}"],
+            }
+        except Exception as e:
+            return {
+                **state,
+                "status": "error",
+                "logs": state["logs"]
+                + [f"❌ 任务完成，但在推送或保存元数据时出错: {str(e)}"],
+            }
 
-        return {
-            **state,
-            "status": "completed",
-            "logs": state["logs"] + [f"🚀 同步终点已对齐至: {latest_a_id[:8]}"],
-        }
-
-    # --- 情况 2：正在处理补丁 ---
+    # --- 3. 正常应用补丁逻辑 ---
     current_cid = pending[idx]
-    # 1. 获取原提交信息
+
+    # 获取元数据
     metadata = pm.get_commit_metadata(current_cid)
 
-    # 2. 生成并尝试应用补丁
-    patch_content = pm.generate_patch(current_cid)
-    success, error_log = pm.apply_patch_attempt(patch_content)
+    # 生成并应用补丁
+    patch_bytes = pm.generate_patch(current_cid)
+    success, error_log = pm.apply_patch_attempt(patch_bytes)
 
     if success:
-        # 3. 提交代码并保留作者历史
+        # 应用成功：提交并记录作者历史
         pm.commit_with_metadata(metadata)
-
-        # 4. 更新元数据 (使用顶部导入的 DiscoveryManager)
-        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+        # 单步更新元数据文件
         dm.save_metadata(current_cid)
 
         return {

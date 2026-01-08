@@ -1,107 +1,79 @@
 diff --git a/langchain_code_sync/backend/core/nodes/patching.py b/langchain_code_sync/backend/core/nodes/patching.py
-index e8df6f3f4fa1c16983d7fc32fac233e86fa37550..c55131d185cd8e1f982547ab3f768e8ca20837bc 100644
+index c55131d185cd8e1f982547ab3f768e8ca20837bc..aca01395a073acc7e1e8d6db06dc617ca4d31367 100644
 --- a/langchain_code_sync/backend/core/nodes/patching.py
 +++ b/langchain_code_sync/backend/core/nodes/patching.py
-@@ -7,27 +7,28 @@ from services.git_manager import PatchManager, DiscoveryManager
- 
- def apply_patch_node(state: SyncState) -> Dict[str, Any]:
+@@ -9,39 +9,51 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
      idx = state["current_commit_index"]
--    if idx >= len(state["pending_commits"]):
-+    pending = state["pending_commits"]
-+
-+    # --- 情况 1：所有补丁已处理完 ---
+     pending = state["pending_commits"]
+ 
+-    # --- 情况 1：所有补丁已处理完 ---
+-    if idx >= len(pending):
+-        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
++    # --- 1. 立即初始化所有 Manager，确保任何分支都能访问 ---
++    pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
++    dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
++    # 确保 dm 内部的元数据路径已经更新为物理路径
++    dm._update_paths(state["repo_a_dir"], state["repo_b_dir"])
+ 
+-        # 【核心修改】保存 Repo A 此时真正的远程最新 ID (311eb8d)
+-        latest_a_id = dm.get_remote_head()
+-        dm.save_metadata(latest_a_id)
++    # --- 2. 检查任务是否已经完成 ---
 +    if idx >= len(pending):
-+        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
-+
-+        # 【核心修改】保存 Repo A 此时真正的远程最新 ID (311eb8d)
-+        latest_a_id = dm.get_remote_head()
-+        dm.save_metadata(latest_a_id)
-+
-+        # 执行 Push
-         pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
--        try:
--            state["logs"].append("正在同步到远程仓库 (Pushing)...")
--            pm.push_to_remote()
--            return {
--                **state,
--                "status": "completed",
--                "logs": state["logs"] + ["🚀 所有补丁已同步并推送到远程仓库！"],
--            }
--        except Exception as e:
--            return {
--                **state,
--                "status": "error",
--                "logs": state["logs"] + [f"❌ 代码已在本地同步，但推送失败: {str(e)}"],
--            }
-+        pm.push_to_remote()
++        try:
++            # 获取 Repo A 真正的远程 HEAD (311eb8d)
++            latest_a_id = dm.get_remote_head()
++            # 保存到指纹文件，确保下次同步对齐
++            dm.save_metadata(latest_a_id)
  
--    # 使用已经导入的 PatchManager
--    pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
--    current_cid = state["pending_commits"][idx]
-+        return {
-+            **state,
-+            "status": "completed",
-+            "logs": state["logs"] + [f"🚀 同步终点已对齐至: {latest_a_id[:8]}"],
-+        }
+-        # 执行 Push
+-        pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
+-        pm.push_to_remote()
++            # 推送到远程 Repo B
++            pm.push_to_remote()
  
-+    # --- 情况 2：正在处理补丁 ---
-+    current_cid = pending[idx]
-     # 1. 获取原提交信息
+-        return {
+-            **state,
+-            "status": "completed",
+-            "logs": state["logs"] + [f"🚀 同步终点已对齐至: {latest_a_id[:8]}"],
+-        }
++            return {
++                **state,
++                "status": "completed",
++                "logs": state["logs"]
++                + [f"🚀 所有补丁同步完成，终点对齐至: {latest_a_id[:8]}"],
++            }
++        except Exception as e:
++            return {
++                **state,
++                "status": "error",
++                "logs": state["logs"]
++                + [f"❌ 任务完成，但在推送或保存元数据时出错: {str(e)}"],
++            }
+ 
+-    # --- 情况 2：正在处理补丁 ---
++    # --- 3. 正常应用补丁逻辑 ---
+     current_cid = pending[idx]
+-    # 1. 获取原提交信息
++
++    # 获取元数据
      metadata = pm.get_commit_metadata(current_cid)
  
-diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index d3912b020b8f07c4cf4bf2a2b274a9c5e10a2bfa..6f988f50189768eda5ff4827eab8894af632eeaf 100644
---- a/langchain_code_sync/backend/services/git_manager.py
-+++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -85,16 +85,42 @@ class DiscoveryManager:
-         }
+-    # 2. 生成并尝试应用补丁
+-    patch_content = pm.generate_patch(current_cid)
+-    success, error_log = pm.apply_patch_attempt(patch_content)
++    # 生成并应用补丁
++    patch_bytes = pm.generate_patch(current_cid)
++    success, error_log = pm.apply_patch_attempt(patch_bytes)
  
-     def get_pending_commits(self, base_commit: str) -> List[str]:
--        self.run_git(["fetch", "origin"], self.repo_a_dir)
--        out = self.run_git(
-+        """
-+        强制从远程获取最新列表，确保不被本地过时的 HEAD 欺骗
-+        """
-+        # 1. 必须先 fetch，否则本地永远看不到 GitHub 上的 311eb8d
-+        subprocess.run(["git", "fetch", "origin"], cwd=self.repo_a_dir, check=True)
-+
-+        # 2. 【核心修改】使用 origin/main 进行比对，而不是 HEAD
-+        # 这确保了你能发现 88c579 到 311eb8d 之间的那个增量
-+        output = self.run_git(
-             ["rev-list", f"{base_commit}..origin/main", "--reverse"], self.repo_a_dir
--        )
--        if not out:  # 尝试 master 兜底
--            out = self.run_git(
--                ["rev-list", f"{base_commit}..origin/master", "--reverse"],
--                self.repo_a_dir,
--            )
--        return out.splitlines() if out else []
-+        ).strip()
-+
-+        commits = output.splitlines() if output else []
-+        print(f"DEBUG: 从 {base_commit[:8]} 到 origin/main 发现 {len(commits)} 个提交")
-+        return commits
-+
-+    def save_metadata(self, commit_id: str):
-+        """
-+        保存已同步的 Commit ID 到元数据文件
-+        """
-+        # 确保 repo_b_dir 是物理路径且存在
-+        if not self.repo_b_dir or not os.path.exists(self.repo_b_dir):
-+            # 兜底逻辑：如果路径没初始化，尝试即时推导（虽然正常流程应该已经初始化了）
-+            print("DEBUG: save_metadata 路径异常，尝试自动定位...")
-+
-+        path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
-+        print(f"DEBUG: 正在保存元数据 -> {path}")
-+
-+        with open(path, "w", encoding="utf-8") as f:
-+            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
-+
-+    def get_remote_head(self) -> str:
-+        """获取 Repo A 远程仓库真实的最新 Commit ID"""
-+        # 再次执行 fetch 确保数据最新
-+        subprocess.run(["git", "fetch", "origin"], cwd=self.repo_a_dir, check=True)
-+        return self.run_git(["rev-parse", "origin/main"], self.repo_a_dir).strip()
+     if success:
+-        # 3. 提交代码并保留作者历史
++        # 应用成功：提交并记录作者历史
+         pm.commit_with_metadata(metadata)
+-
+-        # 4. 更新元数据 (使用顶部导入的 DiscoveryManager)
+-        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
++        # 单步更新元数据文件
+         dm.save_metadata(current_cid)
  
- 
- class PatchManager:
+         return {

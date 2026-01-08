@@ -1,83 +1,12 @@
 diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index deda8fd08a5042fb861f00b67e16460c6e081465..6dc8e67f817fb62053766d9d84d3fdca6b0050d2 100644
+index 6dc8e67f817fb62053766d9d84d3fdca6b0050d2..ee780d5af2c5957afe7228fe1ee8e9164a1ce5fa 100644
 --- a/langchain_code_sync/backend/services/git_manager.py
 +++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -2,6 +2,7 @@ import subprocess
- import json
+@@ -3,6 +3,7 @@ import json
  import os
  from typing import Dict, List, Tuple, Optional
-+import hashlib
+ import hashlib
++# 这是source的注释
  
  
  class DiscoveryManager:
-@@ -19,32 +20,57 @@ class DiscoveryManager:
-             return ""  # 或者抛出异常，视情况而定
-         return result.stdout
- 
-+    def _get_unique_repo_path(self, url: str) -> str:
-+        """
-+        根据 URL 生成唯一的文件夹路径
-+        """
-+        # 使用 SHA256 生成哈希值（取前 12 位即可保证极低碰撞率）
-+        url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
-+
-+        # 提取仓库名（例如 https://github.com/user/project.git -> project）
-+        repo_name = url.split("/")[-1].replace(".git", "")
-+
-+        home = os.path.expanduser("~")
-+        workspace = os.path.join(home, ".git_sync_agent_workspace")
-+
-+        # 最终文件夹名格式：project_a1b2c3d4e5f6
-+        return os.path.join(workspace, f"{repo_name}_{url_hash}")
-+
-     def ensure_local_repo(self, path_or_url: str, name: str) -> str:
-+        """
-+        name 参数在此方案中将不再作为文件夹名，仅作为日志标识
-+        """
-         if path_or_url.startswith(("http", "git@")):
--            home = os.path.expanduser("~")
--            workspace = os.path.join(home, ".git_sync_agent_workspace")
--            os.makedirs(workspace, exist_ok=True)
--            local_path = os.path.join(workspace, name)
-+            local_path = self._get_unique_repo_path(path_or_url)
-+
-+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
- 
-             if not os.path.exists(local_path):
--                print(f"正在克隆 {name}...")
-+                print(f"检测到新仓库，正在克隆: {path_or_url}")
-                 subprocess.run(["git", "clone", path_or_url, local_path], check=True)
-             else:
--                print(f"正在深度同步 {name} 远程状态...")
--                # 1. 获取远程最新数据
-+                print(f"命中本地缓存，正在同步远程状态: {local_path}")
-+                # 执行 fetch + reset 逻辑对齐远程
-                 subprocess.run(["git", "fetch", "origin"], cwd=local_path, check=True)
- 
--                # 2. 【核心修复】强制将本地分支重置为远程分支的状态
--                # 假设分支名为 main（如果是 master 请修改）
--                # 这步会确保本地代码和远程 GitHub 上的代码一模一样
--                branch = "main"
-+                # 动态获取当前远程分支名
-+                try:
-+                    # 尝试获取默认分支
-+                    res = subprocess.run(
-+                        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-+                        cwd=local_path,
-+                        capture_output=True,
-+                        text=True,
-+                    )
-+                    branch = res.stdout.strip().split("/")[-1]
-+                except:
-+                    branch = "main"  # 兜底
-+
-                 subprocess.run(
-                     ["git", "reset", "--hard", f"origin/{branch}"],
-                     cwd=local_path,
-                     check=True,
-                 )
--
--                # 3. 清理可能存在的未跟踪文件（防止干扰补丁）
-                 subprocess.run(["git", "clean", "-fd"], cwd=local_path, check=True)
- 
-             return local_path

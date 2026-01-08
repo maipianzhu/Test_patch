@@ -1,16 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv, find_dotenv
-
-# 自动加载 .env 文件 (搜索当前及父级目录)
-load_dotenv(find_dotenv())
-
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
 
 # 导入我们之前定义的逻辑
 from core.graph import create_sync_graph
 from services.git_manager import PatchManager
+from fastapi import BackgroundTasks  # 确保导入了后台任务
+
+# 自动加载 .env 文件 (搜索当前及父级目录)
+load_dotenv(find_dotenv())
 
 app = FastAPI(title="Git Sync Agent API")
 
@@ -41,10 +40,6 @@ class ResolveRequest(BaseModel):
 
 
 # --- API 接口实现 ---
-
-
-from fastapi import BackgroundTasks  # 导入后台任务
-
 
 # 加点注释看一下
 # 再加一些注释测试一下呢
@@ -93,9 +88,6 @@ async def get_status(thread_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
 
     return state.values
-
-
-from fastapi import BackgroundTasks  # 确保导入了后台任务
 
 
 @app.post("/sync/resolve")

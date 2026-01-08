@@ -1,45 +1,46 @@
 diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
-index 07ac0c968ae3870df4ef2d487af601d5d4bbeebb..8b8e0472e6219bb3eb9f2ebf1cd814bf50d76645 100644
+index 8b8e0472e6219bb3eb9f2ebf1cd814bf50d76645..3127d256ab2846ece83b08af28f1ed300c1d6978 100644
 --- a/langchain_code_sync/backend/app/main.py
 +++ b/langchain_code_sync/backend/app/main.py
-@@ -58,12 +58,16 @@ async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
-         "repo_a_dir": req.repo_a_dir,
-         "repo_b_dir": req.repo_b_dir,
-         "current_commit_index": 0,
-+        "pending_commits": [],  # 必须清空待处理列表
-         "logs": ["任务已进入后台执行队列..."],
-         "has_conflict": False,
-         "conflicts": [],
-         "status": "analyzing",
-     }
+@@ -1,16 +1,15 @@
+ from fastapi import FastAPI, HTTPException
+ from dotenv import load_dotenv, find_dotenv
+-
+-# 自动加载 .env 文件 (搜索当前及父级目录)
+-load_dotenv(find_dotenv())
+-
+ from fastapi.middleware.cors import CORSMiddleware
+ from pydantic import BaseModel
+-from typing import List, Optional
  
-+    # 2. 【核心修复】强制更新状态，将该 thread_id 的进度拨回起点
-+    sync_graph.update_state(config, initial_state)
+ # 导入我们之前定义的逻辑
+ from core.graph import create_sync_graph
+ from services.git_manager import PatchManager
++from fastapi import BackgroundTasks  # 确保导入了后台任务
 +
-     # 定义一个后台运行的函数
-     def run_workflow():
-         try:
-diff --git a/langchain_code_sync/frontend/src/App.tsx b/langchain_code_sync/frontend/src/App.tsx
-index d7c4459efcbe66b923cfc819221c44f486c565e5..4b99fbca946e8ecbd3e51903bc8e372c3197444a 100644
---- a/langchain_code_sync/frontend/src/App.tsx
-+++ b/langchain_code_sync/frontend/src/App.tsx
-@@ -55,8 +55,18 @@ function App() {
-     }, [isPolling, threadId, state?.status]); // 增加 state.status 作为依赖项
++# 自动加载 .env 文件 (搜索当前及父级目录)
++load_dotenv(find_dotenv())
  
-     const startSync = async () => {
-+        // 1. 【核心修复】立即给用户反馈，清空旧的日志和状态
-+        setState(null);
-+
-         setIsPolling(true);
--        await syncApi.start(repoA, repoB, threadId);
-+
-+        try {
-+            await syncApi.start(repoA, repoB, threadId);
-+        } catch (e) {
-+            console.error("启动失败", e);
-+            alert("启动失败，请检查后端");
-+            setIsPolling(false);
-+        }
-     };
+ app = FastAPI(title="Git Sync Agent API")
  
-     return (
+@@ -42,10 +41,6 @@ class ResolveRequest(BaseModel):
+ 
+ # --- API 接口实现 ---
+ 
+-
+-from fastapi import BackgroundTasks  # 导入后台任务
+-
+-
+ # 加点注释看一下
+ # 再加一些注释测试一下呢
+ 
+@@ -95,9 +90,6 @@ async def get_status(thread_id: str):
+     return state.values
+ 
+ 
+-from fastapi import BackgroundTasks  # 确保导入了后台任务
+-
+-
+ @app.post("/sync/resolve")
+ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTasks):
+     config = {"configurable": {"thread_id": req.thread_id}}

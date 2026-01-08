@@ -1,46 +1,13 @@
-diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
-index 8b8e0472e6219bb3eb9f2ebf1cd814bf50d76645..3127d256ab2846ece83b08af28f1ed300c1d6978 100644
---- a/langchain_code_sync/backend/app/main.py
-+++ b/langchain_code_sync/backend/app/main.py
-@@ -1,16 +1,15 @@
- from fastapi import FastAPI, HTTPException
- from dotenv import load_dotenv, find_dotenv
--
--# 自动加载 .env 文件 (搜索当前及父级目录)
--load_dotenv(find_dotenv())
--
- from fastapi.middleware.cors import CORSMiddleware
- from pydantic import BaseModel
--from typing import List, Optional
+diff --git a/langchain_code_sync/backend/core/nodes/discovery.py b/langchain_code_sync/backend/core/nodes/discovery.py
+index ee3ee7b94725af0f2d6377a52b521fc60844a91b..128085a68c2f0dd7179a91f610321b770b60449c 100644
+--- a/langchain_code_sync/backend/core/nodes/discovery.py
++++ b/langchain_code_sync/backend/core/nodes/discovery.py
+@@ -17,7 +17,7 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
+         # 更新 dm 内部的路径为物理路径，否则 dm.find_best_match() 还会去读 URL 导致报错
+         dm._update_paths(local_a, local_b)
  
- # 导入我们之前定义的逻辑
- from core.graph import create_sync_graph
- from services.git_manager import PatchManager
-+from fastapi import BackgroundTasks  # 确保导入了后台任务
-+
-+# 自动加载 .env 文件 (搜索当前及父级目录)
-+load_dotenv(find_dotenv())
+-        logs.append(f"✅ 仓库已定位至本地 Hash 目录")
++        logs.append("✅ 仓库已定位至本地 Hash 目录")
  
- app = FastAPI(title="Git Sync Agent API")
- 
-@@ -42,10 +41,6 @@ class ResolveRequest(BaseModel):
- 
- # --- API 接口实现 ---
- 
--
--from fastapi import BackgroundTasks  # 导入后台任务
--
--
- # 加点注释看一下
- # 再加一些注释测试一下呢
- 
-@@ -95,9 +90,6 @@ async def get_status(thread_id: str):
-     return state.values
- 
- 
--from fastapi import BackgroundTasks  # 确保导入了后台任务
--
--
- @app.post("/sync/resolve")
- async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTasks):
-     config = {"configurable": {"thread_id": req.thread_id}}
+         # 【第三步】现在执行 Git 操作，cwd 就会是 local_a，不再是 URL
+         base_commit = dm.load_metadata()

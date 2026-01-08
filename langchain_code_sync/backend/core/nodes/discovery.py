@@ -17,7 +17,7 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
         # 更新 dm 内部的路径为物理路径，否则 dm.find_best_match() 还会去读 URL 导致报错
         dm._update_paths(local_a, local_b)
 
-        logs.append(f"✅ 仓库已定位至本地 Hash 目录")
+        logs.append("✅ 仓库已定位至本地 Hash 目录")
 
         # 【第三步】现在执行 Git 操作，cwd 就会是 local_a，不再是 URL
         base_commit = dm.load_metadata()

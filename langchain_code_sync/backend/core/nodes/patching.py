@@ -1,36 +1,53 @@
 from typing import Any, Dict
 from core.state import SyncState
-
-# 关键：统一在顶部导入
 from services.git_manager import PatchManager, DiscoveryManager
 
 
 def apply_patch_node(state: SyncState) -> Dict[str, Any]:
+    """
+    补丁应用节点：负责逐个应用补丁，处理成功提交及冲突提取。
+    """
     idx = state["current_commit_index"]
     pending = state["pending_commits"]
 
-    # --- 1. 立即初始化所有 Manager，确保任何分支都能访问 ---
+    # --- 1. 初始化 Manager (放置在函数顶部，防止 UnboundLocalError) ---
+    # 这里的 repo_a_dir 和 repo_b_dir 已经是 discovery 节点转换后的本地物理路径
     pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
     dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
-    # 确保 dm 内部的元数据路径已经更新为物理路径
+    # 确保 dm 内部路径已同步（用于 save_metadata）
     dm._update_paths(state["repo_a_dir"], state["repo_b_dir"])
 
-    # --- 2. 检查任务是否已经完成 ---
+    # --- 2. 检查任务是否已经全部完成 ---
     if idx >= len(pending):
         try:
-            # 获取 Repo A 真正的远程 HEAD (311eb8d)
+            state["logs"].append("正在进行最终对齐并推送到远程...")
+
+            # 获取 Repo A 真正的远程 HEAD ID (例如 354b2ceb)
             latest_a_id = dm.get_remote_head()
-            # 保存到指纹文件，确保下次同步对齐
+
+            # A. 先写入元数据文件
             dm.save_metadata(latest_a_id)
 
-            # 推送到远程 Repo B
+            # B. 必须执行一次提交，把这个 JSON 变动同步进 Repo B 的历史
+            pm._run_git_text(["add", ".sync_metadata.json"], state["repo_b_dir"])
+            # 检查是否有变动需要提交，防止空提交报错
+            status_out = pm._run_git_text(
+                ["status", "--porcelain"], state["repo_b_dir"]
+            )
+            if status_out.strip():
+                pm._run_git_text(
+                    ["commit", "-m", f"chore: 最终同步起点对齐至 {latest_a_id[:8]}"],
+                    state["repo_b_dir"],
+                )
+
+            # C. 推送到远程
             pm.push_to_remote()
 
             return {
                 **state,
                 "status": "completed",
                 "logs": state["logs"]
-                + [f"🚀 所有补丁同步完成，终点对齐至: {latest_a_id[:8]}"],
+                + [f"🚀 所有补丁同步完成，终点已对齐至: {latest_a_id[:8]}"],
             }
         except Exception as e:
             return {
@@ -42,19 +59,23 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
 
     # --- 3. 正常应用补丁逻辑 ---
     current_cid = pending[idx]
+    state["logs"].append(f"正在处理补丁 ({idx + 1}/{len(pending)}): {current_cid[:8]}")
 
-    # 获取元数据
+    # A. 获取原提交元数据（作者、消息）
     metadata = pm.get_commit_metadata(current_cid)
 
-    # 生成并应用补丁
+    # B. 生成二进制补丁并尝试应用
     patch_bytes = pm.generate_patch(current_cid)
     success, error_log = pm.apply_patch_attempt(patch_bytes)
 
     if success:
-        # 应用成功：提交并记录作者历史
-        pm.commit_with_metadata(metadata)
-        # 单步更新元数据文件
+        # --- 核心改进：调整顺序 ---
+        # 1. 先保存元数据到磁盘文件
         dm.save_metadata(current_cid)
+
+        # 2. 再执行 commit（内部包含 git add .）
+        # 这样刚才修改的 .sync_metadata.json 就会和代码改动一起被提交
+        pm.commit_with_metadata(metadata)
 
         return {
             **state,
@@ -64,22 +85,19 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
             "logs": state["logs"] + [f"✅ 同步完成: {metadata['message'][:40]}..."],
         }
     else:
-        # 5. 冲突处理逻辑
+        # --- 4. 冲突处理逻辑 ---
         conflict_files = pm.get_conflict_files()
 
-        # 如果 apply 失败了，但 git 并没有在索引中生成未合并文件
         if not conflict_files:
-            # 打印前 10 行补丁内容，检查文件路径是否正确
-            print(f"DEBUG: Patch Head -> {patch_content[:500]}")
-            print(f"DEBUG: Error Log -> {error_log}")
+            # 如果 apply 失败但没产生冲突标记（通常是路径深度或格式问题）
+            # 我们选择停下来报错，而不是盲目跳过
             return {
                 **state,
                 "status": "error",
-                "logs": state["logs"]
-                + [f"❌ 补丁应用彻底失败（无法自动处理）: {error_log[:200]}"],
+                "logs": state["logs"] + [f"❌ 补丁应用彻底失败: {error_log[:200]}"],
             }
 
-        # 提取冲突内容供 UI 显示
+        # 提取冲突内容供前端三栏编辑器使用
         all_conflicts = []
         for f_path in conflict_files:
             three_way = pm.get_three_way_content(f_path)
@@ -89,7 +107,7 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
                     "base_content": three_way["base"],
                     "ours_content": three_way["ours"],
                     "theirs_content": three_way["theirs"],
-                    "ai_suggestion": None,
+                    "ai_suggestion": None,  # 留给下一个 ai_expert 节点处理
                 }
             )
 
@@ -98,5 +116,5 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
             "has_conflict": True,
             "conflicts": all_conflicts,
             "status": "conflicted",
-            "logs": state["logs"] + [f"🚧 冲突发生: {current_cid[:8]}，请人工裁决"],
+            "logs": state["logs"] + [f"🚧 冲突发生于 {current_cid[:8]}，请人工裁决"],
         }

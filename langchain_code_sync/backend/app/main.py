@@ -115,12 +115,12 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
             idx = current_state["current_commit_index"]
             cid = current_state["pending_commits"][idx]
 
+            # 更新元数据文件 (使用 PatchManager 里的方法)
+            pm.save_metadata(cid)
+
             # 获取元数据并提交
             metadata = pm.get_commit_metadata(cid)
             pm.commit_with_metadata(metadata)
-
-            # 更新元数据文件 (使用 PatchManager 里的方法)
-            pm.save_metadata(cid)
 
             # 手动更新状态机进度
             sync_graph.update_state(

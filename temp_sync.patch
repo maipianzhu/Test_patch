@@ -1,27 +1,81 @@
 diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
-index 3127d256ab2846ece83b08af28f1ed300c1d6978..a32317fc3d539e62e5e7773028c8b9723e398eec 100644
+index a32317fc3d539e62e5e7773028c8b9723e398eec..866f821a2dd897ea9e864d61a4e57d84e9d0642a 100644
 --- a/langchain_code_sync/backend/app/main.py
 +++ b/langchain_code_sync/backend/app/main.py
-@@ -8,6 +8,7 @@ from core.graph import create_sync_graph
- from services.git_manager import PatchManager
- from fastapi import BackgroundTasks  # 确保导入了后台任务
+@@ -40,6 +40,11 @@ class ResolveRequest(BaseModel):
+     content: str  # 用户在 UI 上修好的最终代码
  
+ 
++# 正确的定义：取消操作只需要 thread_id
++class ThreadRequest(BaseModel):
++    thread_id: str
 +
- # 自动加载 .env 文件 (搜索当前及父级目录)
- load_dotenv(find_dotenv())
++
+ # --- API 接口实现 ---
  
-@@ -145,6 +146,16 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
-         raise HTTPException(status_code=500, detail=str(e))
+ # 加点注释看一下
+@@ -147,15 +152,64 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
  
  
-+@app.post("/sync/confirm_push")
-+async def confirm_push(req: SyncRequest, background_tasks: BackgroundTasks):
+ @app.post("/sync/confirm_push")
+-async def confirm_push(req: SyncRequest, background_tasks: BackgroundTasks):
++async def confirm_push(req: ThreadRequest, background_tasks: BackgroundTasks):
+     config = {"configurable": {"thread_id": req.thread_id}}
+ 
++    # 1. 先校验任务是否存在
++    state_snapshot = sync_graph.get_state(config)
++    if not state_snapshot.values:
++        raise HTTPException(status_code=404, detail="任务不存在")
++
++    # 2. 【核心修复】在唤醒前，手动把状态改为 'applying' 或 'pushing'
++    # 这样前端下一次轮询看到 status 变了，弹窗就会消失
++    sync_graph.update_state(
++        config,
++        {
++            "status": "applying",
++            "logs": state_snapshot.values["logs"]
++            + ["已收到推送指令，正在处理最终同步..."],
++        },
++    )
++
++    # 3. 异步唤醒图运行 push_approval 节点
++    def run_approval():
++        try:
++            sync_graph.invoke(None, config)
++        except Exception as e:
++            # 如果推送过程报错，更新状态让前端看到错误
++            sync_graph.update_state(
++                config,
++                {"status": "error", "logs": ["❌ 推送执行失败，请检查网络或权限。"]},
++            )
++            print(f"Push Error: {e}")
++
+     # 唤醒图，此时它会进入 push_approval_node 并执行推送
+-    background_tasks.add_task(sync_graph.invoke, None, config)
++    background_tasks.add_task(run_approval)
+ 
+     return {"message": "Pushing to remote..."}
+ 
+ 
++@app.post("/sync/cancel")
++async def cancel_sync(req: ThreadRequest):
 +    config = {"configurable": {"thread_id": req.thread_id}}
 +
-+    # 唤醒图，此时它会进入 push_approval_node 并执行推送
-+    background_tasks.add_task(sync_graph.invoke, None, config)
++    # 获取当前状态
++    state_snapshot = sync_graph.get_state(config)
++    if not state_snapshot.values:
++        return {"message": "任务已不存在"}
 +
-+    return {"message": "Pushing to remote..."}
++    # 【核心修复】手动将状态拨向结束，这样轮询就不会再拿到 awaiting_push
++    sync_graph.update_state(
++        config,
++        {
++            "status": "completed",
++            "logs": state_snapshot.values["logs"] + ["🚫 用户取消了本次同步推送。"],
++        },
++    )
++
++    return {"message": "Sync canceled"}
 +
 +
  if __name__ == "__main__":

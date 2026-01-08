@@ -40,6 +40,11 @@ class ResolveRequest(BaseModel):
     content: str  # 用户在 UI 上修好的最终代码
 
 
+# 正确的定义：取消操作只需要 thread_id
+class ThreadRequest(BaseModel):
+    thread_id: str
+
+
 # --- API 接口实现 ---
 
 # 加点注释看一下
@@ -147,13 +152,62 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
 
 
 @app.post("/sync/confirm_push")
-async def confirm_push(req: SyncRequest, background_tasks: BackgroundTasks):
+async def confirm_push(req: ThreadRequest, background_tasks: BackgroundTasks):
     config = {"configurable": {"thread_id": req.thread_id}}
 
+    # 1. 先校验任务是否存在
+    state_snapshot = sync_graph.get_state(config)
+    if not state_snapshot.values:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    # 2. 【核心修复】在唤醒前，手动把状态改为 'applying' 或 'pushing'
+    # 这样前端下一次轮询看到 status 变了，弹窗就会消失
+    sync_graph.update_state(
+        config,
+        {
+            "status": "applying",
+            "logs": state_snapshot.values["logs"]
+            + ["已收到推送指令，正在处理最终同步..."],
+        },
+    )
+
+    # 3. 异步唤醒图运行 push_approval 节点
+    def run_approval():
+        try:
+            sync_graph.invoke(None, config)
+        except Exception as e:
+            # 如果推送过程报错，更新状态让前端看到错误
+            sync_graph.update_state(
+                config,
+                {"status": "error", "logs": ["❌ 推送执行失败，请检查网络或权限。"]},
+            )
+            print(f"Push Error: {e}")
+
     # 唤醒图，此时它会进入 push_approval_node 并执行推送
-    background_tasks.add_task(sync_graph.invoke, None, config)
+    background_tasks.add_task(run_approval)
 
     return {"message": "Pushing to remote..."}
+
+
+@app.post("/sync/cancel")
+async def cancel_sync(req: ThreadRequest):
+    config = {"configurable": {"thread_id": req.thread_id}}
+
+    # 获取当前状态
+    state_snapshot = sync_graph.get_state(config)
+    if not state_snapshot.values:
+        return {"message": "任务已不存在"}
+
+    # 【核心修复】手动将状态拨向结束，这样轮询就不会再拿到 awaiting_push
+    sync_graph.update_state(
+        config,
+        {
+            "status": "completed",
+            "logs": state_snapshot.values["logs"] + ["🚫 用户取消了本次同步推送。"],
+        },
+    )
+
+    return {"message": "Sync canceled"}
 
 
 if __name__ == "__main__":

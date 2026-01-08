@@ -1,204 +1,62 @@
 diff --git a/.gitignore b/.gitignore
-index cd664c9b7c46a5240a15fc4db4d1720aac77d626..e803c47d4a8ebae983c0e8306d24ac02508b0fd2 100644
+index e803c47d4a8ebae983c0e8306d24ac02508b0fd2..da9f0be9c43ee02e80c3369416a11af678db494f 100644
 --- a/.gitignore
 +++ b/.gitignore
-@@ -9,3 +9,6 @@ langchain_code_sync/backend/checkpoints.db-shm
- langchain_code_sync/backend/checkpoints.db-wal
- **/workspace/*
+@@ -11,4 +11,5 @@ langchain_code_sync/backend/checkpoints.db-wal
  langchain_code_sync/backend/workspace/repo_b
-+workspace/
-+checkpoints.db
-+.sync_metadata.json
+ workspace/
+ checkpoints.db
+-.sync_metadata.json
 \ No newline at end of file
-diff --git a/langchain_code_sync/backend/core/nodes/patching.py b/langchain_code_sync/backend/core/nodes/patching.py
-index b15f674444cdb0b087e4da819339bfed5e16b8d9..e8df6f3f4fa1c16983d7fc32fac233e86fa37550 100644
---- a/langchain_code_sync/backend/core/nodes/patching.py
-+++ b/langchain_code_sync/backend/core/nodes/patching.py
-@@ -58,6 +58,7 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
-         if not conflict_files:
-             # 打印前 10 行补丁内容，检查文件路径是否正确
-             print(f"DEBUG: Patch Head -> {patch_content[:500]}")
-+            print(f"DEBUG: Error Log -> {error_log}")
-             return {
-                 **state,
-                 "status": "error",
++.sync_metadata.json
++# 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000
+\ No newline at end of file
 diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index 589e96c09409a531047ab3b19cf91369c0ad2135..1a314a2998f50a203482a088971ef53e952eee0b 100644
+index 1a314a2998f50a203482a088971ef53e952eee0b..deda8fd08a5042fb861f00b67e16460c6e081465 100644
 --- a/langchain_code_sync/backend/services/git_manager.py
 +++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -17,7 +17,7 @@ class DiscoveryManager:
-         )
-         if result.returncode != 0:
-             return ""  # 或者抛出异常，视情况而定
--        return result.stdout.strip()
-+        return result.stdout
+@@ -21,23 +21,32 @@ class DiscoveryManager:
  
      def ensure_local_repo(self, path_or_url: str, name: str) -> str:
          if path_or_url.startswith(("http", "git@")):
-@@ -26,7 +26,7 @@ class DiscoveryManager:
- 
-             # --- 方案 B: 放在用户家目录下 (推荐，稳定且不干扰项目) ---
+-            # --- 方案 A: 放在系统临时目录 (重启电脑可能丢失) ---
+-            # workspace = os.path.join(tempfile.gettempdir(), "git_sync_agent")
+-
+-            # --- 方案 B: 放在用户家目录下 (推荐，稳定且不干扰项目) ---
              home = os.path.expanduser("~")
--            workspace = os.path.join(home, ".git_sync_agent_workspace")
-+            workspace = os.path.join(home, "git_sync_agent_workspace/")
- 
-             if not os.path.exists(workspace):
-                 os.makedirs(workspace, exist_ok=True)
-@@ -107,94 +107,80 @@ class PatchManager:
-         result = subprocess.run(
-             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
-         )
--        return result.stdout.strip()
-+        # 核心修改：移除 .strip()，原样返回输出以保护补丁格式
-+        return result.stdout
- 
-     def generate_patch(self, commit_id: str) -> str:
-         """
--        使用 format-patch 生成标准补丁，它包含完整的元数据和差异
-+        生成补丁，移除末尾多余的 strip
-         """
--        # --stdout 将补丁输出到字符串
--        # -1 表示针对这一个 commit
-+        # 注意：这里也移除了末尾的 .strip()
-         return self.run_git(
--            ["format-patch", "-1", "--stdout", commit_id], self.repo_a_dir
-+            [
-+                "show",
-+                commit_id,
-+                "--patch",
-+                "--binary",
-+                "--full-index",
-+                "--no-color",
-+                "--pretty=format:",
-+                "--",
-+                ".",
-+                ":!workspace",
-+                ":!**/workspace/**",
-+                ":!backend/workspace",
-+                ":!checkpoints.db*",
-+            ],
-+            self.repo_a_dir,
-         )
- 
-     def apply_patch_attempt(self, patch_content: str) -> Tuple[bool, str]:
-+        # 增加校验，防止传入空字符串
-+        if not patch_content or not patch_content.strip():
-+            return True, "Empty patch"
+-            workspace = os.path.join(home, "git_sync_agent_workspace/")
+-
+-            if not os.path.exists(workspace):
+-                os.makedirs(workspace, exist_ok=True)
+-
++            workspace = os.path.join(home, ".git_sync_agent_workspace")
++            os.makedirs(workspace, exist_ok=True)
+             local_path = os.path.join(workspace, name)
 +
-         patch_path = os.path.join(self.repo_b_dir, "temp_sync.patch")
--        with open(patch_path, "w", encoding="utf-8", newline="\n") as f:
-+        # 使用 newline='' 确保换行符不被系统修改（跨平台兼容）
-+        with open(patch_path, "w", encoding="utf-8", newline="") as f:
-             f.write(patch_content)
- 
--        try:
--            # --- 关键修改：更宽容的参数 ---
--            # --3way: 允许三路合并
--            # --whitespace=nowarn: 忽略行尾空格报错（解决你的报错的关键）
--            # --reject: 如果补丁应用失败，强制生成 .rej 文件（这能保证我们拿到冲突信息）
--            subprocess.run(
--                ["git", "apply", "--3way", "--whitespace=nowarn", "temp_sync.patch"],
--                cwd=self.repo_b_dir,
--                capture_output=True,
--                text=True,
--                check=True,
--            )
--            return True, ""
--        except subprocess.CalledProcessError as e:
--            # 即便报错，我们也检查一下是否有文件冲突（git 可能会部分应用）
--            return False, e.stderr
--
--    def get_conflict_files(self) -> List[str]:
--        """获取当前冲突的文件列表"""
--        output = self.run_git(
--            ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
--        )
--        return output.splitlines()
--
--    def get_three_way_content(self, file_path: str) -> Dict[str, str]:
--        """
--        核心逻辑：从 Git 暂存区提取三个阶段的内容
--        Stage 1: Base (共同祖先)
--        Stage 2: Ours (RepoB 当前)
--        Stage 3: Theirs (RepoA 补丁)
--        """
--        contents = {}
--        for stage, label in [("1", "base"), ("2", "ours"), ("3", "theirs")]:
-+        all_errors = []
-+        # 增加 --recount 参数，这会让 Git 尝试自动修正小的格式错误
-+        for p_level in ["1", "2"]:
-             try:
--                # git show :stage:path 获取特定阶段的文件内容
--                content = self.run_git(
--                    ["show", f":{stage}:{file_path}"], self.repo_b_dir
+             if not os.path.exists(local_path):
+-                print(f"Cloning {name}...")
++                print(f"正在克隆 {name}...")
+                 subprocess.run(["git", "clone", path_or_url, local_path], check=True)
+             else:
+-                print(f"Updating {name}...")
+-                subprocess.run(["git", "fetch", "--all"], cwd=local_path, check=True)
++                print(f"正在深度同步 {name} 远程状态...")
++                # 1. 获取远程最新数据
++                subprocess.run(["git", "fetch", "origin"], cwd=local_path, check=True)
++
++                # 2. 【核心修复】强制将本地分支重置为远程分支的状态
++                # 假设分支名为 main（如果是 master 请修改）
++                # 这步会确保本地代码和远程 GitHub 上的代码一模一样
++                branch = "main"
 +                subprocess.run(
-+                    [
-+                        "git",
-+                        "apply",
-+                        f"-p{p_level}",
-+                        "--3way",
-+                        "--recount",
-+                        "--whitespace=nowarn",
-+                        "temp_sync.patch",
-+                    ],
-+                    cwd=self.repo_b_dir,
-+                    capture_output=True,
-+                    text=True,
++                    ["git", "reset", "--hard", f"origin/{branch}"],
++                    cwd=local_path,
 +                    check=True,
-                 )
--                contents[label] = content
--            except:
--                contents[label] = ""  # 如果该阶段不存在（例如新增文件）
--        return contents
-+                print(f"DEBUG: 使用 -p{p_level} 成功应用补丁")
-+                return True, ""
-+            except subprocess.CalledProcessError as e:
-+                all_errors.append(f"[-p{p_level}] {e.stderr}")
- 
--    def resolve_file_manually(self, file_path: str, final_content: str):
--        """
--        将用户在 UI 上修好的代码写入物理文件，并标记为已解决
--        """
--        full_path = os.path.join(self.repo_b_dir, file_path)
--        with open(full_path, "w", encoding="utf-8") as f:
--            f.write(final_content)
--
--        # 必须执行 git add，告诉 git 冲突已解决
--        self.run_git(["add", file_path], self.repo_b_dir)
--
--    def is_all_resolved(self) -> bool:
--        """检查是否所有冲突都已 add"""
--        conflicts = self.get_conflict_files()
--        return len(conflicts) == 0
-+        return False, "\n".join(all_errors)
- 
-     def get_commit_metadata(self, commit_id: str) -> Dict[str, str]:
--        """
--        从 RepoA 获取该提交的作者、邮箱和描述信息
--        """
--        # %an: 作者名, %ae: 邮箱, %s: 主题, %b: 正文
-+        # 在这里手动 strip 结果，因为元数据需要清理空格
-         author_name = self.run_git(
-             ["log", "-1", "--format=%an", commit_id], self.repo_a_dir
--        )
-+        ).strip()
-         author_email = self.run_git(
-             ["log", "-1", "--format=%ae", commit_id], self.repo_a_dir
--        )
--        subject = self.run_git(["log", "-1", "--format=%s", commit_id], self.repo_a_dir)
-+        ).strip()
-+        subject = self.run_git(
-+            ["log", "-1", "--format=%s", commit_id], self.repo_a_dir
-+        ).strip()
-         body = self.run_git(["log", "-1", "--format=%b", commit_id], self.repo_a_dir)
- 
-         return {
-@@ -202,6 +188,8 @@ class PatchManager:
-             "message": f"{subject}\n\n{body}".strip(),
-         }
- 
-+    # ... 其余方法保持不变，但确保调用 run_git 后如果需要处理路径名，手动加上 .strip() ...
++                )
 +
-     def commit_with_metadata(self, metadata: Dict[str, str]):
-         """
-         在 RepoB 中使用指定的元数据提交代码
++                # 3. 清理可能存在的未跟踪文件（防止干扰补丁）
++                subprocess.run(["git", "clean", "-fd"], cwd=local_path, check=True)
++
+             return local_path
+         return os.path.abspath(path_or_url)
+ 

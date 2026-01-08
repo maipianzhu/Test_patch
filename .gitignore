@@ -12,3 +12,4 @@ langchain_code_sync/backend/workspace/repo_b
 workspace/
 checkpoints.db
 .sync_metadata.json
+# 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000

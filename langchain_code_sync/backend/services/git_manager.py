@@ -21,23 +21,32 @@ class DiscoveryManager:
 
     def ensure_local_repo(self, path_or_url: str, name: str) -> str:
         if path_or_url.startswith(("http", "git@")):
-            # --- 方案 A: 放在系统临时目录 (重启电脑可能丢失) ---
-            # workspace = os.path.join(tempfile.gettempdir(), "git_sync_agent")
-
-            # --- 方案 B: 放在用户家目录下 (推荐，稳定且不干扰项目) ---
             home = os.path.expanduser("~")
-            workspace = os.path.join(home, "git_sync_agent_workspace/")
-
-            if not os.path.exists(workspace):
-                os.makedirs(workspace, exist_ok=True)
-
+            workspace = os.path.join(home, ".git_sync_agent_workspace")
+            os.makedirs(workspace, exist_ok=True)
             local_path = os.path.join(workspace, name)
+
             if not os.path.exists(local_path):
-                print(f"Cloning {name}...")
+                print(f"正在克隆 {name}...")
                 subprocess.run(["git", "clone", path_or_url, local_path], check=True)
             else:
-                print(f"Updating {name}...")
-                subprocess.run(["git", "fetch", "--all"], cwd=local_path, check=True)
+                print(f"正在深度同步 {name} 远程状态...")
+                # 1. 获取远程最新数据
+                subprocess.run(["git", "fetch", "origin"], cwd=local_path, check=True)
+
+                # 2. 【核心修复】强制将本地分支重置为远程分支的状态
+                # 假设分支名为 main（如果是 master 请修改）
+                # 这步会确保本地代码和远程 GitHub 上的代码一模一样
+                branch = "main"
+                subprocess.run(
+                    ["git", "reset", "--hard", f"origin/{branch}"],
+                    cwd=local_path,
+                    check=True,
+                )
+
+                # 3. 清理可能存在的未跟踪文件（防止干扰补丁）
+                subprocess.run(["git", "clean", "-fd"], cwd=local_path, check=True)
+
             return local_path
         return os.path.abspath(path_or_url)
 

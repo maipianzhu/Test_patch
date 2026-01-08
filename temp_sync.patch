@@ -1,106 +1,383 @@
-diff --git a/langchain_code_sync/backend/core/nodes/discovery.py b/langchain_code_sync/backend/core/nodes/discovery.py
-index fcc2ef0b38e480cb9fd087bdb57ac3e471bec6ca..ee3ee7b94725af0f2d6377a52b521fc60844a91b 100644
---- a/langchain_code_sync/backend/core/nodes/discovery.py
-+++ b/langchain_code_sync/backend/core/nodes/discovery.py
-@@ -15,16 +15,19 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
- 
-         # 【第二步】非常重要！！
-         # 更新 dm 内部的路径为物理路径，否则 dm.find_best_match() 还会去读 URL 导致报错
--        dm.repo_a_dir = local_a
--        dm.repo_b_dir = local_b
--        
-+        dm._update_paths(local_a, local_b)
-+
-         logs.append(f"✅ 仓库已定位至本地 Hash 目录")
- 
-         # 【第三步】现在执行 Git 操作，cwd 就会是 local_a，不再是 URL
-         base_commit = dm.load_metadata()
-+
-         if not base_commit:
-+            logs.append("未发现同步记录，正在扫描指纹...")
-             base_commit, score = dm.find_best_match()
--            logs.append(f"识别起点: {base_commit[:8]}")
-+            logs.append(f"识别起点: {base_commit[:8]} (匹配度: {score:.2%})")
-+        else:
-+            logs.append(f"从指纹文件加载起点: {base_commit[:8]}")
- 
-         pending = dm.get_pending_commits(base_commit)
- 
-@@ -37,7 +40,7 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
-             "base_commit": base_commit,
-             "pending_commits": pending,
-             "status": "applying" if pending else "completed",
--            "logs": logs + [f"发现 {len(pending)} 个提交"]
-+            "logs": logs + [f"发现 {len(pending)} 个提交"],
-         }
-     except Exception as e:
--        return {**state, "status": "error", "logs": logs + [f"❌ 错误: {str(e)}"]}
+diff --git a/langchain_code_sync/frontend/package-lock.json b/langchain_code_sync/frontend/package-lock.json
+index 0f7a55d75fe9dfb31ef1ad1e5c3c4483a17c32ac..28514f20b315f96b37dd70ee2cd115680121bf2c 100644
+--- a/langchain_code_sync/frontend/package-lock.json
++++ b/langchain_code_sync/frontend/package-lock.json
+@@ -11,6 +11,7 @@
+                 "@monaco-editor/react": "^4.6.0",
+                 "@tailwindcss/postcss": "^4.1.18",
+                 "axios": "^1.6.0",
++                "diff": "^8.0.2",
+                 "lucide-react": "^0.562.0",
+                 "react": "^18.2.0",
+                 "react-dom": "^18.2.0"
+@@ -1757,6 +1758,15 @@
+                 "node": ">=8"
+             }
+         },
++        "node_modules/diff": {
++            "version": "8.0.2",
++            "resolved": "https://registry.npmjs.org/diff/-/diff-8.0.2.tgz",
++            "integrity": "sha512-sSuxWU5j5SR9QQji/o2qMvqRNYRDOcBTgsJ/DeCf4iSN4gW+gNMXM7wFIP+fdXZxoNiAnHUTGjCr+TSWXdRDKg==",
++            "license": "BSD-3-Clause",
++            "engines": {
++                "node": ">=0.3.1"
++            }
++        },
+         "node_modules/dompurify": {
+             "version": "3.2.7",
+             "resolved": "https://registry.npmjs.org/dompurify/-/dompurify-3.2.7.tgz",
+diff --git a/langchain_code_sync/frontend/package.json b/langchain_code_sync/frontend/package.json
+index fe321f348807c1d87e5362810ac2777b04331494..aa44cf9cb1dd9444305984f86882488c024c6117 100644
+--- a/langchain_code_sync/frontend/package.json
++++ b/langchain_code_sync/frontend/package.json
+@@ -6,6 +6,7 @@
+         "@monaco-editor/react": "^4.6.0",
+         "@tailwindcss/postcss": "^4.1.18",
+         "axios": "^1.6.0",
++        "diff": "^8.0.2",
+         "lucide-react": "^0.562.0",
+         "react": "^18.2.0",
+         "react-dom": "^18.2.0"
+@@ -26,4 +27,4 @@
+         "build": "vite build",
+         "preview": "vite preview"
+     }
+-}
 \ No newline at end of file
-+        return {**state, "status": "error", "logs": logs + [f"❌ 错误: {str(e)}"]}
-diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index b0b09a651d494e0c7a734ae41c70776c5fa3503f..2c5c260462f1ce8fb0fe61754c0d5c33b3ae9333 100644
---- a/langchain_code_sync/backend/services/git_manager.py
-+++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -13,6 +13,29 @@ class DiscoveryManager:
-         # 元数据存放在 RepoB 的根目录下
-         self.metadata_path = os.path.join(repo_b_dir, ".sync_metadata.json")
++}
+diff --git a/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx b/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx
+index 081c8934ba64907ee4c6e6d1560179dd2992eb79..23a71a1e98154810ab5177e7a1b4846edb824598 100644
+--- a/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx
++++ b/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx
+@@ -1,157 +1,201 @@
+-import React, { useState, useEffect } from 'react';
+-import Editor from '@monaco-editor/react';
++import React, { useState, useEffect, useRef } from 'react';
++import Editor, { Monaco } from '@monaco-editor/react';
++import * as diff from 'diff';
  
-+    def _update_paths(self, local_a: str, local_b: str):
-+        """核心方法：转换完路径后，同步更新内部变量"""
-+        self.repo_a_dir = local_a
-+        self.repo_b_dir = local_b
-+        # 只有到了这一步，路径才是正确的 /Users/admin/.git_sync_agent_workspace/...
-+        self.metadata_path = os.path.join(local_b, ".sync_metadata.json")
-+        print(f"DEBUG: 元数据路径已锁定 -> {self.metadata_path}")
+-export interface Conflict {
+-    file_path: string;
+-    content: string;
+-}
+-
+-export interface MergeWorkstationProps {
+-    conflict: Conflict;
+-    onResolve: (filePath: string, content: string) => Promise<void>;
+-}
+-
+-const MergeWorkstation: React.FC<MergeWorkstationProps> = ({
+-    conflict,
+-    onResolve,
+-}) => {
+-    // Determine language from file extension
+-    const getLanguage = (path: string) => {
+-        if (path.endsWith('.py')) return 'python';
+-        if (path.endsWith('.ts') || path.endsWith('.tsx')) return 'typescript';
+-        if (path.endsWith('.js') || path.endsWith('.jsx')) return 'javascript';
+-        if (path.endsWith('.json')) return 'json';
+-        if (path.endsWith('.md')) return 'markdown';
+-        return 'plaintext';
++// 定义接口，解决 TypeScript 找不到名称的问题
++interface ConflictProps {
++    conflict: {
++        file_path: string;
++        base_content: string;
++        ours_content: string;
++        theirs_content: string;
++        ai_suggestion: string | null;
+     };
++    onResolve: (filePath: string, resolvedContent: string) => void;
++}
+ 
+-    const fileName = conflict?.file_path || 'Unknown File';
+-    const initialContent = conflict?.content || '';
+-    const language = getLanguage(fileName);
++const MergeWorkstation: React.FC<ConflictProps> = ({ conflict, onResolve }) => {
++    const [mergedContent, setMergedContent] = useState("");
+ 
+-    const [content, setContent] = useState(initialContent);
++    // 使用 Ref 记录三个编辑器的实例，以便统一涂色
++    const editorsRef = useRef<{ type: string; editor: any }[]>([]);
+ 
+-    // Update content when conflict prop changes
++    // 当文件切换时，重置中间栏内容并清空编辑器引用记录
+     useEffect(() => {
+-        setContent(conflict?.content || '');
++        setMergedContent(conflict.ai_suggestion || conflict.ours_content || "");
++        editorsRef.current = [];
+     }, [conflict]);
+ 
+-    const handleEditorChange = (value: string | undefined) => {
+-        setContent(value || '');
+-    };
++    /**
++     * 核心逻辑：精准计算并高亮差异
++     */
++    const applyHighlighter = (monaco: Monaco) => {
++        // 1. 计算 Ours 和 Theirs 分别相对于 Base 的变化
++        const oursDiff = diff.diffLines(conflict.base_content, conflict.ours_content);
++        const theirsDiff = diff.diffLines(conflict.base_content, conflict.theirs_content);
+ 
+-    const handleSave = () => {
+-        if (onResolve && conflict) {
+-            onResolve(conflict.file_path, content);
+-        }
++        // 辅助函数：将 diff 数组转为 Map<行号, 内容>
++        const getChangeMap = (diffArray: diff.Change[]) => {
++            let currentLine = 1;
++            const changeMap = new Map<number, string>();
++            diffArray.forEach(part => {
++                if (part.added) {
++                    const lines = part.value.split('\n');
++                    // 去掉最后一个因 split 产生的空行
++                    if (lines[lines.length - 1] === "") lines.pop();
++                    lines.forEach((text, i) => {
++                        changeMap.set(currentLine + i, text.trim());
++                    });
++                    currentLine += part.count!;
++                } else if (!part.removed) {
++                    currentLine += part.count!;
++                }
++            });
++            return changeMap;
++        };
 +
-+    def load_metadata(self) -> Optional[str]:
-+        # 增加防御性检查
-+        if not hasattr(self, "metadata_path"):
-+            print("DEBUG: 警告！尚未初始化 metadata_path")
-+            return None
++        const oursChanges = getChangeMap(oursDiff);
++        const theirsChanges = getChangeMap(theirsDiff);
 +
-+        if os.path.exists(self.metadata_path):
-+            with open(self.metadata_path, "r") as f:
-+                data = json.load(f)
-+                val = data.get("last_synced_commit_repo_a")
-+                print(f"DEBUG: 成功读取元数据文件，起点为: {val}")
-+                return val
-+        print(f"DEBUG: 未在路径找到元数据文件: {self.metadata_path}")
-+        return None
++        // 2. 遍历编辑器实例进行涂色
++        editorsRef.current.forEach(({ type, editor }) => {
++            const decorations: any[] = [];
++            const isOurs = type === 'ours';
++            const isTheirs = type === 'theirs';
 +
-     def run_git(self, args: List[str], cwd: str) -> str:
-         result = subprocess.run(
-             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
-@@ -113,6 +136,12 @@ class DiscoveryManager:
-         return None
- 
-     def save_metadata(self, commit_id: str):
-+        # 确保路径已经过 _update_paths 初始化
-+        if not hasattr(self, "metadata_path"):
-+            # 兜底逻辑：如果没初始化，尝试即时生成
-+            self.metadata_path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
++            const currentMap = isOurs ? oursChanges : (isTheirs ? theirsChanges : new Map());
++            const opponentContent = isOurs ? conflict.theirs_content : conflict.ours_content;
 +
-+        print(f"DEBUG: 正在保存元数据到 -> {self.metadata_path}")
-         with open(self.metadata_path, "w") as f:
-             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
++            currentMap.forEach((text, lineNum) => {
++                // 精准冲突判定：如果当前行在对方的内容里找不到完全一致的行，则是冲突
++                const isTrueConflict = !opponentContent.includes(text);
++
++                let colorClass = "";
++                let borderClass = "";
++                let rulerColor = "";
++
++                if (isTrueConflict) {
++                    colorClass = "bg-red-900/30";
++                    borderClass = "border-l-4 border-red-500";
++                    rulerColor = "red";
++                } else {
++                    // 如果两边改得一模一样，使用淡灰色
++                    colorClass = "bg-gray-700/20";
++                    borderClass = "border-l-2 border-gray-400";
++                    rulerColor = "gray";
++                }
++
++                // 如果不是冲突但又是本地特有改动，显示蓝/绿
++                if (!isTrueConflict) {
++                    // 保持低调颜色
++                } else if (isOurs) {
++                    colorClass = "bg-blue-900/20";
++                    borderClass = "border-l-4 border-blue-500";
++                    rulerColor = "blue";
++                } else if (isTheirs) {
++                    colorClass = "bg-green-900/20";
++                    borderClass = "border-l-4 border-green-500";
++                    rulerColor = "green";
++                }
++
++                decorations.push({
++                    range: new monaco.Range(lineNum, 1, lineNum, 1),
++                    options: {
++                        isWholeLine: true,
++                        className: colorClass,
++                        linesDecorationsClassName: borderClass,
++                        overviewRuler: { color: rulerColor, position: 1 }
++                    }
++                });
++            });
++
++            // 应用装饰
++            editor.deltaDecorations([], decorations);
++        });
+     };
  
-@@ -263,9 +292,7 @@ class PatchManager:
-     def get_conflict_files(self) -> List[str]:
-         """获取当前冲突的文件列表 (对应报错的修复)"""
-         # 使用 --diff-filter=U 查找未合并(Unmerged)的文件
--        out = self._run_git_text(
--            ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
--        )
-+        out = self.run_git(["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir)
-         return out.strip().splitlines()
+-    const handleCancel = () => {
+-        // Optional: Reset content or emit cancel event if needed
+-        setContent(initialContent);
++    const onEditorMount = (editor: any, monaco: Monaco, type: string) => {
++        editorsRef.current.push({ type, editor });
++        // 当三个编辑器都挂载完成后，执行高亮
++        if (editorsRef.current.length === 3) {
++            applyHighlighter(monaco);
++        }
+     };
  
-     def get_three_way_content(self, file_path: str) -> Dict[str, str]:
-@@ -281,7 +308,7 @@ class PatchManager:
-         full_path = os.path.join(self.repo_b_dir, file_path)
-         with open(full_path, "w", encoding="utf-8") as f:
-             f.write(final_content)
--        self._run_git_text(["add", file_path], self.repo_b_dir)
-+        self.run_git(["add", file_path], self.repo_b_dir)
+     return (
+-        <div style={{
+-            display: 'flex',
+-            flexDirection: 'column',
+-            height: '100%',
+-            backgroundColor: '#ffffff',
+-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+-        }}>
+-            {/* Header */}
+-            <div style={{
+-                padding: '12px 16px',
+-                backgroundColor: '#f8f9fa',
+-                borderBottom: '1px solid #e1e4e8',
+-                display: 'flex',
+-                justifyContent: 'space-between',
+-                alignItems: 'center',
+-                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+-                zIndex: 10
+-            }}>
+-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+-                    <span style={{ fontSize: '18px' }}>📄</span>
+-                    <h3 style={{
+-                        margin: 0,
+-                        fontSize: '14px',
+-                        fontWeight: 600,
+-                        color: '#24292e'
+-                    }}>
+-                        {fileName}
+-                    </h3>
+-                    <span style={{
+-                        fontSize: '12px',
+-                        color: '#586069',
+-                        backgroundColor: '#e1e4e8',
+-                        padding: '2px 6px',
+-                        borderRadius: '12px'
+-                    }}>
+-                        {language}
+-                    </span>
++        <div className="flex flex-col w-full h-full bg-[#1e1e1e] overflow-hidden">
++            {/* 顶部状态栏 */}
++            <div className="flex items-center justify-between px-4 py-2 bg-[#252526] border-b border-[#333]">
++                <div className="flex items-center gap-3">
++                    <span className="text-blue-400 font-mono text-sm">{conflict.file_path.split('/').pop()}</span>
++                    <span className="text-gray-500 text-xs truncate max-w-xs">{conflict.file_path}</span>
++                    <div className="flex items-center gap-2 ml-4">
++                        <span className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
++                        <span className="text-red-400 text-xs font-bold uppercase tracking-widest">Conflict Detected</span>
++                    </div>
+                 </div>
+-
+-                <div style={{ display: 'flex', gap: '10px' }}>
++                <div className="flex gap-2">
+                     <button
+-                        onClick={handleCancel}
+-                        style={{
+-                            padding: '6px 14px',
+-                            border: '1px solid #d1d5da',
+-                            borderRadius: '6px',
+-                            background: 'white',
+-                            color: '#24292e',
+-                            fontSize: '13px',
+-                            fontWeight: 500,
+-                            cursor: 'pointer',
+-                            transition: 'all 0.2s',
+-                            boxShadow: '0 1px 0 rgba(27,31,35,0.04)'
+-                        }}
+-                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#f3f4f6'}
+-                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'white'}
++                        onClick={() => setMergedContent(conflict.ours_content)}
++                        className="px-3 py-1 text-xs text-gray-400 hover:text-white transition"
+                     >
+-                        Reset
++                        重置
+                     </button>
+                     <button
+-                        onClick={handleSave}
+-                        style={{
+-                            padding: '6px 14px',
+-                            border: '1px solid rgba(27,31,35,0.15)',
+-                            borderRadius: '6px',
+-                            background: '#2ea44f',
+-                            color: 'white',
+-                            fontSize: '13px',
+-                            fontWeight: 600,
+-                            cursor: 'pointer',
+-                            transition: 'all 0.2s',
+-                            boxShadow: '0 1px 0 rgba(27,31,35,0.1)'
+-                        }}
+-                        onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#2c974b'}
+-                        onMouseOut={(e) => e.currentTarget.style.backgroundColor = '#2ea44f'}
++                        onClick={() => onResolve(conflict.file_path, mergedContent)}
++                        className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-1.5 rounded text-sm font-bold shadow-lg transition-all"
+                     >
+-                        Resolve & Save
++                        确认合并并继续
+                     </button>
+                 </div>
+             </div>
  
-     def is_all_resolved(self) -> bool:
-         return len(self.get_conflict_files()) == 0
+-            {/* Editor Container */}
+-            <div style={{ flex: 1, position: 'relative' }}>
+-                <Editor
+-                    height="100%"
+-                    defaultLanguage={language}
+-                    value={content}
+-                    onChange={handleEditorChange}
+-                    theme="vs-light"
+-                    options={{
+-                        minimap: { enabled: true },
+-                        fontSize: 13,
+-                        lineNumbers: 'on',
+-                        roundedSelection: false,
+-                        scrollBeyondLastLine: false,
+-                        readOnly: false,
+-                        automaticLayout: true,
+-                        padding: { top: 16 }
+-                    }}
+-                />
++            {/* 三栏编辑器主体 */}
++            <div className="flex flex-1 w-full" style={{ height: 'calc(100vh - 120px)' }}>
++
++                {/* 左栏：Ours */}
++                <div className="flex-1 flex flex-col border-r border-[#333]">
++                    <div className="bg-[#2d2d2d] text-blue-300 text-[10px] px-2 py-1 font-bold">本地分支 (OURS)</div>
++                    <div className="flex-1">
++                        <Editor
++                            theme="vs-dark"
++                            language="python"
++                            value={conflict.ours_content}
++                            onMount={(e, m) => onEditorMount(e, m, 'ours')}
++                            options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }}
++                        />
++                    </div>
++                </div>
++
++                {/* 中栏：Result */}
++                <div className="flex-1 flex flex-col border-r border-[#444] z-10 shadow-2xl ring-1 ring-white/5">
++                    <div className="bg-[#094771] text-white text-[10px] px-2 py-1 font-bold text-center italic">最终合并结果 (RESULT)</div>
++                    <div className="flex-1">
++                        <Editor
++                            theme="vs-dark"
++                            language="python"
++                            value={mergedContent}
++                            onChange={(v) => setMergedContent(v || "")}
++                            onMount={(e, m) => onEditorMount(e, m, 'result')}
++                            options={{ minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }}
++                        />
++                    </div>
++                </div>
++
++                {/* 右栏：Theirs */}
++                <div className="flex-1 flex flex-col">
++                    <div className="bg-[#2d2d2d] text-green-300 text-[10px] px-2 py-1 font-bold text-right">补丁来源 (THEIRS)</div>
++                    <div className="flex-1">
++                        <Editor
++                            theme="vs-dark"
++                            language="python"
++                            value={conflict.theirs_content}
++                            onMount={(e, m) => onEditorMount(e, m, 'theirs')}
++                            options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false }}
++                        />
++                    </div>
++                </div>
++
+             </div>
+         </div>
+     );

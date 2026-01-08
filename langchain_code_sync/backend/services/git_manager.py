@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Optional
 import hashlib
 # 加个冲突的注释看看呢
 
+
 class DiscoveryManager:
     def __init__(self, repo_a_dir: str, repo_b_dir: str):
         self.repo_a_dir = repo_a_dir

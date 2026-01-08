@@ -13,5 +13,13 @@ export const syncApi = {
 
     // 提交人工合并结果
     resolve: (threadId: string, filePath: string, content: string) =>
-        axios.post(`${API_BASE}/sync/resolve`, { thread_id: threadId, file_path: filePath, content: content })
+        axios.post(`${API_BASE}/sync/resolve`, { thread_id: threadId, file_path: filePath, content: content }),
+
+    // 确认推送
+    confirmPush: (threadId: string) =>
+        axios.post(`${API_BASE}/sync/confirm_push`, { thread_id: threadId }),
+
+    // 取消同步
+    cancelSync: (threadId: string) =>
+        axios.post(`${API_BASE}/sync/cancel`, { thread_id: threadId }),
 };

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { syncApi } from './api';
 import MergeWorkstation from './components/MergeWorkstation';
-import { Terminal, Play, CheckCircle } from 'lucide-react';
+import { Terminal, Play, CheckCircle, AlertTriangle, Rocket, XCircle } from 'lucide-react';
 
 function App() {
     // 生成一个持久的 threadId
@@ -11,36 +11,48 @@ function App() {
     const [state, setState] = useState<any>(null);
     const [isPolling, setIsPolling] = useState(false);
 
-    // --- 关键方法：处理手动合并提交 ---
+    // --- 1. 处理代码冲突合并提交 ---
     const handleResolve = async (filePath: string, content: string) => {
         try {
-            // 1. 告诉后端：这个文件修好了
             await syncApi.resolve(threadId, filePath, content);
-
-            // 2. 核心：乐观更新 (Optimistic Update)
-            // 即使后端还没轮询回来，我们也立即让前端切回“正在应用”状态
-            // 这样用户点击按钮后，界面会立刻变回黑色日志区，体验会很顺滑
+            // 乐观更新：立即切回日志界面
             setState((prev: any) => ({
                 ...prev,
                 status: 'applying',
                 has_conflict: false,
                 conflicts: []
             }));
-
-            console.log("冲突已提交，等待后端推进...");
         } catch (e) {
             console.error("提交合并失败", e);
             alert("提交合并失败，请检查网络或后端日志");
         }
     };
 
-    // 轮询逻辑：每 2 秒向后端要一次最新状态
+    // --- 2. 新增：处理最终推送确认 ---
+    const handleConfirmPush = async () => {
+        try {
+            // 乐观更新状态
+            setState((prev: any) => ({ ...prev, status: 'applying' }));
+            // 调用后端确认推送接口
+            await syncApi.confirmPush(threadId);
+        } catch (e) {
+            console.error("推送失败", e);
+            alert("推送指令发送失败");
+        }
+    };
+
+    // 轮询逻辑：每 2 秒获取一次状态
     useEffect(() => {
         let timer: number;
 
-        // 核心逻辑：如果是正在应用中，才开启轮询
-        // 如果已经是 'conflicted'（冲突中）或 'completed'（已完成），则不需要轮询
-        if (isPolling && state?.status !== 'conflicted' && state?.status !== 'completed') {
+        // 核心修改：在 'conflicted'、'awaiting_push' 或 'completed' 状态下停止轮询，等待人工操作
+        const shouldStopPolling =
+            state?.status === 'conflicted' ||
+            state?.status === 'awaiting_push' ||
+            state?.status === 'completed' ||
+            state?.status === 'error';
+
+        if (isPolling && !shouldStopPolling) {
             timer = window.setInterval(async () => {
                 try {
                     const res = await syncApi.getStatus(threadId);
@@ -52,14 +64,11 @@ function App() {
         }
 
         return () => clearInterval(timer);
-    }, [isPolling, threadId, state?.status]); // 增加 state.status 作为依赖项
+    }, [isPolling, threadId, state?.status]);
 
     const startSync = async () => {
-        // 1. 【核心修复】立即给用户反馈，清空旧的日志和状态
         setState(null);
-
         setIsPolling(true);
-
         try {
             await syncApi.start(repoA, repoB, threadId);
         } catch (e) {
@@ -67,6 +76,12 @@ function App() {
             alert("启动失败，请检查后端");
             setIsPolling(false);
         }
+    };
+
+    const handleCancel = async () => {
+        setIsPolling(false); // 先停掉轮询
+        await syncApi.cancelSync(threadId); // 告诉后端任务结束了
+        setState(null); // 清空 UI
     };
 
     return (
@@ -84,27 +99,69 @@ function App() {
                 </div>
             </header>
 
-            <main className="flex-1 overflow-hidden relative">
+            <main className="flex-1 overflow-hidden relative flex flex-col">
                 {!state ? (
                     <div className="flex items-center justify-center h-full text-gray-400 font-mono italic">
                         请在上方输入仓库 URL 并点击开始同步
                     </div>
                 ) : state.status === 'conflicted' ? (
-                    /* 核心冲突处理界面 */
-                    <MergeWorkstation
-                        conflict={state.conflicts[0]}
-                        onResolve={handleResolve} // 调用上面定义的方法
-                    />
+                    <MergeWorkstation conflict={state.conflicts[0]} onResolve={handleResolve} />
+                ) : state.status === 'awaiting_push' ? (
+                    /* --- 核心新增：推送确认界面 --- */
+                    <div className="flex-1 flex items-center justify-center bg-gray-100 p-6">
+                        <div className="bg-white p-8 rounded-xl shadow-2xl max-w-2xl w-full border border-orange-200">
+                            <div className="flex items-center gap-3 mb-6">
+                                <div className="p-3 bg-orange-100 rounded-full text-orange-600">
+                                    <AlertTriangle size={28} />
+                                </div>
+                                <div>
+                                    <h2 className="text-2xl font-bold text-gray-800">同步预检确认</h2>
+                                    <p className="text-sm text-gray-500">所有补丁已在本地应用成功，请确认是否推送到远程仓库。</p>
+                                </div>
+                            </div>
+
+                            <div className="mb-6">
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">待推送的提交摘要：</label>
+                                <pre className="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-xs max-h-60 overflow-y-auto shadow-inner">
+                                    {state.push_summary || "暂无提交明细"}
+                                </pre>
+                            </div>
+
+                            <div className="flex justify-end gap-4">
+                                <button
+                                    onClick={handleCancel}
+                                    className="px-6 py-2 text-gray-500 hover:bg-gray-100 rounded-lg transition"
+                                >
+                                    放弃本次同步
+                                </button>
+                                <button
+                                    onClick={handleConfirmPush}
+                                    className="bg-orange-600 text-white px-10 py-2 rounded-lg font-bold hover:bg-orange-700 shadow-lg flex items-center gap-2 transition-all transform hover:scale-105"
+                                >
+                                    <Rocket size={18} /> 确认推送并完成
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 ) : (
                     /* 日志展示界面 */
                     <div className="p-6 h-full overflow-y-auto font-mono bg-gray-900 text-green-400">
                         {state.logs.map((log: string, i: number) => (
-                            <div key={i} className="mb-1">{`> ${log}`}</div>
+                            <div key={i} className="mb-1 leading-relaxed">{`> ${log}`}</div>
                         ))}
-                        {state.status === 'applying' && <div className="animate-pulse ml-4 mt-2">_ 正在处理补丁序列...</div>}
+                        {(state.status === 'applying' || state.status === 'pushing') && (
+                            <div className="animate-pulse ml-4 mt-2">
+                                _ {state.status === 'pushing' ? '正在推送到远程仓库...' : '正在处理任务序列...'}
+                            </div>
+                        )}
                         {state.status === 'completed' && (
-                            <div className="text-blue-400 mt-6 flex items-center gap-2 font-bold text-lg">
-                                <CheckCircle size={24} /> 所有补丁已成功同步至本地及远程！
+                            <div className="text-blue-400 mt-6 p-4 border border-blue-900/50 bg-blue-900/20 rounded flex items-center gap-3 font-bold text-lg">
+                                <CheckCircle size={24} /> 所有操作已圆满完成！
+                            </div>
+                        )}
+                        {state.status === 'error' && (
+                            <div className="text-red-400 mt-6 p-4 border border-red-900/50 bg-red-900/20 rounded flex items-center gap-3 font-bold">
+                                <XCircle size={24} /> 任务中断：请检查日志输出
                             </div>
                         )}
                     </div>

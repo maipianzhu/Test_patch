@@ -23,31 +23,19 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
             state["logs"].append("正在进行最终对齐并推送到远程...")
 
             # 获取 Repo A 真正的远程 HEAD ID (例如 354b2ceb)
-            latest_a_id = dm.get_remote_head()
+            dm.get_remote_head()
 
-            # A. 先写入元数据文件
-            dm.save_metadata(latest_a_id)
-
-            # B. 必须执行一次提交，把这个 JSON 变动同步进 Repo B 的历史
-            pm._run_git_text(["add", ".sync_metadata.json"], state["repo_b_dir"])
-            # 检查是否有变动需要提交，防止空提交报错
-            status_out = pm._run_git_text(
-                ["status", "--porcelain"], state["repo_b_dir"]
+            # A. 仅生成推送摘要供前端展示
+            push_summary = pm._run_git_text(
+                ["log", "origin/main..HEAD", "--oneline"], state["repo_b_dir"]
             )
-            if status_out.strip():
-                pm._run_git_text(
-                    ["commit", "-m", f"chore: 最终同步起点对齐至 {latest_a_id[:8]}"],
-                    state["repo_b_dir"],
-                )
-
-            # C. 推送到远程
-            pm.push_to_remote()
 
             return {
                 **state,
-                "status": "completed",
+                "status": "awaiting_push",  # 变为等待推送状态
                 "logs": state["logs"]
-                + [f"🚀 所有补丁同步完成，终点已对齐至: {latest_a_id[:8]}"],
+                + ["✅ 所有补丁已应用到本地。等待最终推送确认..."],
+                "push_summary": push_summary,  # 新增一个状态字段存摘要
             }
         except Exception as e:
             return {

@@ -1,170 +1,107 @@
-diff --git a/langchain_code_sync/frontend/src/App.tsx b/langchain_code_sync/frontend/src/App.tsx
-index a084510851dd3948c76e7c7616ea338d21b094b8..d7c4459efcbe66b923cfc819221c44f486c565e5 100644
---- a/langchain_code_sync/frontend/src/App.tsx
-+++ b/langchain_code_sync/frontend/src/App.tsx
-@@ -1,35 +1,58 @@
- import React, { useState, useEffect } from 'react';
- import { syncApi } from './api';
--import MergeWorkstation from './components/MergeWorkstation'; // 我们之前设计的组件
--import { Terminal, Play, CheckCircle, AlertTriangle } from 'lucide-react';
-+import MergeWorkstation from './components/MergeWorkstation';
-+import { Terminal, Play, CheckCircle } from 'lucide-react';
+diff --git a/langchain_code_sync/backend/core/nodes/patching.py b/langchain_code_sync/backend/core/nodes/patching.py
+index e8df6f3f4fa1c16983d7fc32fac233e86fa37550..c55131d185cd8e1f982547ab3f768e8ca20837bc 100644
+--- a/langchain_code_sync/backend/core/nodes/patching.py
++++ b/langchain_code_sync/backend/core/nodes/patching.py
+@@ -7,27 +7,28 @@ from services.git_manager import PatchManager, DiscoveryManager
  
- function App() {
-+    // 生成一个持久的 threadId
-     const [threadId] = useState(`user_${Math.random().toString(36).slice(2, 9)}`);
-     const [repoA, setRepoA] = useState('');
-     const [repoB, setRepoB] = useState('');
-     const [state, setState] = useState<any>(null);
-     const [isPolling, setIsPolling] = useState(false);
+ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
+     idx = state["current_commit_index"]
+-    if idx >= len(state["pending_commits"]):
++    pending = state["pending_commits"]
++
++    # --- 情况 1：所有补丁已处理完 ---
++    if idx >= len(pending):
++        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
++
++        # 【核心修改】保存 Repo A 此时真正的远程最新 ID (311eb8d)
++        latest_a_id = dm.get_remote_head()
++        dm.save_metadata(latest_a_id)
++
++        # 执行 Push
+         pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
+-        try:
+-            state["logs"].append("正在同步到远程仓库 (Pushing)...")
+-            pm.push_to_remote()
+-            return {
+-                **state,
+-                "status": "completed",
+-                "logs": state["logs"] + ["🚀 所有补丁已同步并推送到远程仓库！"],
+-            }
+-        except Exception as e:
+-            return {
+-                **state,
+-                "status": "error",
+-                "logs": state["logs"] + [f"❌ 代码已在本地同步，但推送失败: {str(e)}"],
+-            }
++        pm.push_to_remote()
  
--    // 轮询逻辑
-+    // --- 关键方法：处理手动合并提交 ---
-+    const handleResolve = async (filePath: string, content: string) => {
-+        try {
-+            // 1. 告诉后端：这个文件修好了
-+            await syncApi.resolve(threadId, filePath, content);
-+
-+            // 2. 核心：乐观更新 (Optimistic Update)
-+            // 即使后端还没轮询回来，我们也立即让前端切回“正在应用”状态
-+            // 这样用户点击按钮后，界面会立刻变回黑色日志区，体验会很顺滑
-+            setState((prev: any) => ({
-+                ...prev,
-+                status: 'applying',
-+                has_conflict: false,
-+                conflicts: []
-+            }));
-+
-+            console.log("冲突已提交，等待后端推进...");
-+        } catch (e) {
-+            console.error("提交合并失败", e);
-+            alert("提交合并失败，请检查网络或后端日志");
+-    # 使用已经导入的 PatchManager
+-    pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
+-    current_cid = state["pending_commits"][idx]
++        return {
++            **state,
++            "status": "completed",
++            "logs": state["logs"] + [f"🚀 同步终点已对齐至: {latest_a_id[:8]}"],
 +        }
-+    };
-+
-+    // 轮询逻辑：每 2 秒向后端要一次最新状态
-     useEffect(() => {
-         let timer: number;
--        if (isPolling) {
-+
-+        // 核心逻辑：如果是正在应用中，才开启轮询
-+        // 如果已经是 'conflicted'（冲突中）或 'completed'（已完成），则不需要轮询
-+        if (isPolling && state?.status !== 'conflicted' && state?.status !== 'completed') {
-             timer = window.setInterval(async () => {
-                 try {
-                     const res = await syncApi.getStatus(threadId);
-                     setState(res.data);
-                 } catch (e: any) {
--                    // 如果是 404，说明后端还没准备好 Checkpoint，忽略它
--                    if (e.response?.status === 404) {
--                        console.log("等待任务初始化...");
--                    } else {
--                        console.error("轮询出错", e);
--                    }
-+                    console.error("轮询失败", e);
-                 }
-             }, 2000);
+ 
++    # --- 情况 2：正在处理补丁 ---
++    current_cid = pending[idx]
+     # 1. 获取原提交信息
+     metadata = pm.get_commit_metadata(current_cid)
+ 
+diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
+index d3912b020b8f07c4cf4bf2a2b274a9c5e10a2bfa..6f988f50189768eda5ff4827eab8894af632eeaf 100644
+--- a/langchain_code_sync/backend/services/git_manager.py
++++ b/langchain_code_sync/backend/services/git_manager.py
+@@ -85,16 +85,42 @@ class DiscoveryManager:
          }
+ 
+     def get_pending_commits(self, base_commit: str) -> List[str]:
+-        self.run_git(["fetch", "origin"], self.repo_a_dir)
+-        out = self.run_git(
++        """
++        强制从远程获取最新列表，确保不被本地过时的 HEAD 欺骗
++        """
++        # 1. 必须先 fetch，否则本地永远看不到 GitHub 上的 311eb8d
++        subprocess.run(["git", "fetch", "origin"], cwd=self.repo_a_dir, check=True)
 +
-         return () => clearInterval(timer);
--    }, [isPolling, threadId]);
-+    }, [isPolling, threadId, state?.status]); // 增加 state.status 作为依赖项
++        # 2. 【核心修改】使用 origin/main 进行比对，而不是 HEAD
++        # 这确保了你能发现 88c579 到 311eb8d 之间的那个增量
++        output = self.run_git(
+             ["rev-list", f"{base_commit}..origin/main", "--reverse"], self.repo_a_dir
+-        )
+-        if not out:  # 尝试 master 兜底
+-            out = self.run_git(
+-                ["rev-list", f"{base_commit}..origin/master", "--reverse"],
+-                self.repo_a_dir,
+-            )
+-        return out.splitlines() if out else []
++        ).strip()
++
++        commits = output.splitlines() if output else []
++        print(f"DEBUG: 从 {base_commit[:8]} 到 origin/main 发现 {len(commits)} 个提交")
++        return commits
++
++    def save_metadata(self, commit_id: str):
++        """
++        保存已同步的 Commit ID 到元数据文件
++        """
++        # 确保 repo_b_dir 是物理路径且存在
++        if not self.repo_b_dir or not os.path.exists(self.repo_b_dir):
++            # 兜底逻辑：如果路径没初始化，尝试即时推导（虽然正常流程应该已经初始化了）
++            print("DEBUG: save_metadata 路径异常，尝试自动定位...")
++
++        path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
++        print(f"DEBUG: 正在保存元数据 -> {path}")
++
++        with open(path, "w", encoding="utf-8") as f:
++            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
++
++    def get_remote_head(self) -> str:
++        """获取 Repo A 远程仓库真实的最新 Commit ID"""
++        # 再次执行 fetch 确保数据最新
++        subprocess.run(["git", "fetch", "origin"], cwd=self.repo_a_dir, check=True)
++        return self.run_git(["rev-parse", "origin/main"], self.repo_a_dir).strip()
  
-     const startSync = async () => {
-         setIsPolling(true);
-@@ -38,46 +61,29 @@ function App() {
  
-     return (
-         <div className="h-screen flex flex-col bg-gray-50 text-gray-900">
--            {/* 导航栏 */}
-             <header className="bg-white border-b px-6 py-4 flex justify-between items-center shadow-sm">
-                 <h1 className="text-xl font-bold flex items-center gap-2">
-                     <Terminal className="text-blue-600" /> Git Sync Agent
-                 </h1>
-                 <div className="flex gap-4">
--                    <input
--                        className="border p-2 rounded w-64 text-sm"
--                        placeholder="Repo A 路径 (源)"
--                        value={repoA} onChange={e => setRepoA(e.target.value)}
--                    />
--                    <input
--                        className="border p-2 rounded w-64 text-sm"
--                        placeholder="Repo B 路径 (目标)"
--                        value={repoB} onChange={e => setRepoB(e.target.value)}
--                    />
--                    <button
--                        onClick={startSync}
--                        className="bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 hover:bg-blue-700 transition"
--                    >
-+                    <input className="border p-2 rounded w-64 text-sm" placeholder="Repo A (源)" value={repoA} onChange={e => setRepoA(e.target.value)} />
-+                    <input className="border p-2 rounded w-64 text-sm" placeholder="Repo B (目标)" value={repoB} onChange={e => setRepoB(e.target.value)} />
-+                    <button onClick={startSync} className="bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 hover:bg-blue-700 transition">
-                         <Play size={16} /> 开始同步
-                     </button>
-                 </div>
-             </header>
- 
--            {/* 主工作区 */}
-             <main className="flex-1 overflow-hidden relative">
-                 {!state ? (
--                    <div className="flex items-center justify-center h-full text-gray-400">
--                        请输入路径并开始同步
-+                    <div className="flex items-center justify-center h-full text-gray-400 font-mono italic">
-+                        请在上方输入仓库 URL 并点击开始同步
-                     </div>
-                 ) : state.status === 'conflicted' ? (
-                     /* 核心冲突处理界面 */
-                     <MergeWorkstation
-                         conflict={state.conflicts[0]}
--                        onResolve={async (path, content) => {
--                            await syncApi.resolve(threadId, path, content);
--                            // 提交后重置本地状态，等待轮询更新
--                            setState({ ...state, status: 'applying' });
--                        }}
-+                        onResolve={handleResolve} // 调用上面定义的方法
-                     />
-                 ) : (
-                     /* 日志展示界面 */
-@@ -85,10 +91,10 @@ function App() {
-                         {state.logs.map((log: string, i: number) => (
-                             <div key={i} className="mb-1">{`> ${log}`}</div>
-                         ))}
--                        {state.status === 'applying' && <div className="animate-pulse">_ 正在处理补丁...</div>}
-+                        {state.status === 'applying' && <div className="animate-pulse ml-4 mt-2">_ 正在处理补丁序列...</div>}
-                         {state.status === 'completed' && (
--                            <div className="text-blue-400 mt-4 flex items-center gap-2">
--                                <CheckCircle size={20} /> 所有补丁已成功同步！
-+                            <div className="text-blue-400 mt-6 flex items-center gap-2 font-bold text-lg">
-+                                <CheckCircle size={24} /> 所有补丁已成功同步至本地及远程！
-                             </div>
-                         )}
-                     </div>
-diff --git a/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx b/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx
-index 23a71a1e98154810ab5177e7a1b4846edb824598..a922109ab0e7b9dddac70f463a64e9ccc2b5e7c3 100644
---- a/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx
-+++ b/langchain_code_sync/frontend/src/components/MergeWorkstation.tsx
-@@ -16,16 +16,20 @@ interface ConflictProps {
- 
- const MergeWorkstation: React.FC<ConflictProps> = ({ conflict, onResolve }) => {
-     const [mergedContent, setMergedContent] = useState("");
-+    // 记录当前正在编辑的文件路径
-+    const currentFilePathRef = useRef("");
- 
-     // 使用 Ref 记录三个编辑器的实例，以便统一涂色
-     const editorsRef = useRef<{ type: string; editor: any }[]>([]);
- 
--    // 当文件切换时，重置中间栏内容并清空编辑器引用记录
-     useEffect(() => {
--        setMergedContent(conflict.ai_suggestion || conflict.ours_content || "");
--        editorsRef.current = [];
-+        // 只有当文件路径发生变化时，才重新填充内容
-+        if (currentFilePathRef.current !== conflict.file_path) {
-+            setMergedContent(conflict.ai_suggestion || conflict.ours_content || "");
-+            currentFilePathRef.current = conflict.file_path;
-+            // 这里的 editorsRef.current = [] 也要保留
-+        }
-     }, [conflict]);
--
-     /**
-      * 核心逻辑：精准计算并高亮差异
-      */
+ class PatchManager:

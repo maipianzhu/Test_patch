@@ -85,16 +85,42 @@ class DiscoveryManager:
         }
 
     def get_pending_commits(self, base_commit: str) -> List[str]:
-        self.run_git(["fetch", "origin"], self.repo_a_dir)
-        out = self.run_git(
+        """
+        强制从远程获取最新列表，确保不被本地过时的 HEAD 欺骗
+        """
+        # 1. 必须先 fetch，否则本地永远看不到 GitHub 上的 311eb8d
+        subprocess.run(["git", "fetch", "origin"], cwd=self.repo_a_dir, check=True)
+
+        # 2. 【核心修改】使用 origin/main 进行比对，而不是 HEAD
+        # 这确保了你能发现 88c579 到 311eb8d 之间的那个增量
+        output = self.run_git(
             ["rev-list", f"{base_commit}..origin/main", "--reverse"], self.repo_a_dir
-        )
-        if not out:  # 尝试 master 兜底
-            out = self.run_git(
-                ["rev-list", f"{base_commit}..origin/master", "--reverse"],
-                self.repo_a_dir,
-            )
-        return out.splitlines() if out else []
+        ).strip()
+
+        commits = output.splitlines() if output else []
+        print(f"DEBUG: 从 {base_commit[:8]} 到 origin/main 发现 {len(commits)} 个提交")
+        return commits
+
+    def save_metadata(self, commit_id: str):
+        """
+        保存已同步的 Commit ID 到元数据文件
+        """
+        # 确保 repo_b_dir 是物理路径且存在
+        if not self.repo_b_dir or not os.path.exists(self.repo_b_dir):
+            # 兜底逻辑：如果路径没初始化，尝试即时推导（虽然正常流程应该已经初始化了）
+            print("DEBUG: save_metadata 路径异常，尝试自动定位...")
+
+        path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
+        print(f"DEBUG: 正在保存元数据 -> {path}")
+
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
+
+    def get_remote_head(self) -> str:
+        """获取 Repo A 远程仓库真实的最新 Commit ID"""
+        # 再次执行 fetch 确保数据最新
+        subprocess.run(["git", "fetch", "origin"], cwd=self.repo_a_dir, check=True)
+        return self.run_git(["rev-parse", "origin/main"], self.repo_a_dir).strip()
 
 
 class PatchManager:

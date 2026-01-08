@@ -7,27 +7,28 @@ from services.git_manager import PatchManager, DiscoveryManager
 
 def apply_patch_node(state: SyncState) -> Dict[str, Any]:
     idx = state["current_commit_index"]
-    if idx >= len(state["pending_commits"]):
+    pending = state["pending_commits"]
+
+    # --- 情况 1：所有补丁已处理完 ---
+    if idx >= len(pending):
+        dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
+
+        # 【核心修改】保存 Repo A 此时真正的远程最新 ID (311eb8d)
+        latest_a_id = dm.get_remote_head()
+        dm.save_metadata(latest_a_id)
+
+        # 执行 Push
         pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
-        try:
-            state["logs"].append("正在同步到远程仓库 (Pushing)...")
-            pm.push_to_remote()
-            return {
-                **state,
-                "status": "completed",
-                "logs": state["logs"] + ["🚀 所有补丁已同步并推送到远程仓库！"],
-            }
-        except Exception as e:
-            return {
-                **state,
-                "status": "error",
-                "logs": state["logs"] + [f"❌ 代码已在本地同步，但推送失败: {str(e)}"],
-            }
+        pm.push_to_remote()
 
-    # 使用已经导入的 PatchManager
-    pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
-    current_cid = state["pending_commits"][idx]
+        return {
+            **state,
+            "status": "completed",
+            "logs": state["logs"] + [f"🚀 同步终点已对齐至: {latest_a_id[:8]}"],
+        }
 
+    # --- 情况 2：正在处理补丁 ---
+    current_cid = pending[idx]
     # 1. 获取原提交信息
     metadata = pm.get_commit_metadata(current_cid)
 

@@ -91,39 +91,61 @@ async def get_status(thread_id: str):
     return state.values
 
 
-@app.post("/sync/resolve")
-async def resolve_conflict(req: ResolveRequest):
-    config = {"configurable": {"thread_id": req.thread_id}}
+from fastapi import BackgroundTasks  # 确保导入了后台任务
 
-    # 1. 从 LangGraph 获取当前任务的最新状态（里面存有 local_a_dir 和 local_b_dir）
+
+@app.post("/sync/resolve")
+async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTasks):
+    config = {"configurable": {"thread_id": req.thread_id}}
     state_snapshot = sync_graph.get_state(config)
+
     if not state_snapshot.values:
         raise HTTPException(status_code=404, detail="Task not found")
 
     current_state = state_snapshot.values
-
-    # 2. ！！！关键点：必须使用 state 里的本地物理路径！！！
+    # 实例化 pm
     pm = PatchManager(current_state["repo_a_dir"], current_state["repo_b_dir"])
 
-    # 3. 执行写入操作
     try:
+        # 1. 物理写入并 git add
         pm.resolve_file_manually(req.file_path, req.content)
 
-        # 4. 如果所有冲突都修好了，尝试让 LangGraph 继续运行
+        # 2. 如果所有文件都处理完了，推进状态
         if pm.is_all_resolved():
-            # 唤醒图，传入 None 表示从 interrupt 处恢复
-            sync_graph.invoke(None, config)
-            return {
-                "status": "resumed",
-                "message": "All conflicts resolved, proceeding...",
-            }
+            idx = current_state["current_commit_index"]
+            cid = current_state["pending_commits"][idx]
 
-        return {
-            "status": "pending",
-            "message": "File saved, waiting for other files...",
-        }
+            # 获取元数据并提交
+            metadata = pm.get_commit_metadata(cid)
+            pm.commit_with_metadata(metadata)
 
+            # 更新元数据文件 (使用 PatchManager 里的方法)
+            pm.save_metadata(cid)
+
+            # 手动更新状态机进度
+            sync_graph.update_state(
+                config,
+                {
+                    "current_commit_index": idx + 1,
+                    "has_conflict": False,
+                    "conflicts": [],
+                    "status": "applying",
+                    "logs": current_state["logs"] + [f"✅ 手动解决并提交: {cid[:8]}"],
+                },
+            )
+
+            # 【核心修复】使用后台任务唤醒，不阻塞当前 HTTP 请求
+            background_tasks.add_task(sync_graph.invoke, None, config)
+
+            return {"status": "resumed"}
+
+        return {"status": "pending"}
     except Exception as e:
+        # 在后端打印详细错误，方便我们排查 500 的真相
+        import traceback
+
+        print(f"CRITICAL ERROR IN RESOLVE: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 

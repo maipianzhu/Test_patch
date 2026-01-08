@@ -13,6 +13,29 @@ class DiscoveryManager:
         # 元数据存放在 RepoB 的根目录下
         self.metadata_path = os.path.join(repo_b_dir, ".sync_metadata.json")
 
+    def _update_paths(self, local_a: str, local_b: str):
+        """核心方法：转换完路径后，同步更新内部变量"""
+        self.repo_a_dir = local_a
+        self.repo_b_dir = local_b
+        # 只有到了这一步，路径才是正确的 /Users/admin/.git_sync_agent_workspace/...
+        self.metadata_path = os.path.join(local_b, ".sync_metadata.json")
+        print(f"DEBUG: 元数据路径已锁定 -> {self.metadata_path}")
+
+    def load_metadata(self) -> Optional[str]:
+        # 增加防御性检查
+        if not hasattr(self, "metadata_path"):
+            print("DEBUG: 警告！尚未初始化 metadata_path")
+            return None
+
+        if os.path.exists(self.metadata_path):
+            with open(self.metadata_path, "r") as f:
+                data = json.load(f)
+                val = data.get("last_synced_commit_repo_a")
+                print(f"DEBUG: 成功读取元数据文件，起点为: {val}")
+                return val
+        print(f"DEBUG: 未在路径找到元数据文件: {self.metadata_path}")
+        return None
+
     def run_git(self, args: List[str], cwd: str) -> str:
         result = subprocess.run(
             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
@@ -113,6 +136,12 @@ class DiscoveryManager:
         return None
 
     def save_metadata(self, commit_id: str):
+        # 确保路径已经过 _update_paths 初始化
+        if not hasattr(self, "metadata_path"):
+            # 兜底逻辑：如果没初始化，尝试即时生成
+            self.metadata_path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
+
+        print(f"DEBUG: 正在保存元数据到 -> {self.metadata_path}")
         with open(self.metadata_path, "w") as f:
             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
 
@@ -263,9 +292,7 @@ class PatchManager:
     def get_conflict_files(self) -> List[str]:
         """获取当前冲突的文件列表 (对应报错的修复)"""
         # 使用 --diff-filter=U 查找未合并(Unmerged)的文件
-        out = self._run_git_text(
-            ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
-        )
+        out = self.run_git(["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir)
         return out.strip().splitlines()
 
     def get_three_way_content(self, file_path: str) -> Dict[str, str]:
@@ -281,7 +308,7 @@ class PatchManager:
         full_path = os.path.join(self.repo_b_dir, file_path)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(final_content)
-        self._run_git_text(["add", file_path], self.repo_b_dir)
+        self.run_git(["add", file_path], self.repo_b_dir)
 
     def is_all_resolved(self) -> bool:
         return len(self.get_conflict_files()) == 0

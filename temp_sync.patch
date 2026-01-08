@@ -1,13 +1,106 @@
+diff --git a/langchain_code_sync/backend/core/nodes/discovery.py b/langchain_code_sync/backend/core/nodes/discovery.py
+index fcc2ef0b38e480cb9fd087bdb57ac3e471bec6ca..ee3ee7b94725af0f2d6377a52b521fc60844a91b 100644
+--- a/langchain_code_sync/backend/core/nodes/discovery.py
++++ b/langchain_code_sync/backend/core/nodes/discovery.py
+@@ -15,16 +15,19 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
+ 
+         # 【第二步】非常重要！！
+         # 更新 dm 内部的路径为物理路径，否则 dm.find_best_match() 还会去读 URL 导致报错
+-        dm.repo_a_dir = local_a
+-        dm.repo_b_dir = local_b
+-        
++        dm._update_paths(local_a, local_b)
++
+         logs.append(f"✅ 仓库已定位至本地 Hash 目录")
+ 
+         # 【第三步】现在执行 Git 操作，cwd 就会是 local_a，不再是 URL
+         base_commit = dm.load_metadata()
++
+         if not base_commit:
++            logs.append("未发现同步记录，正在扫描指纹...")
+             base_commit, score = dm.find_best_match()
+-            logs.append(f"识别起点: {base_commit[:8]}")
++            logs.append(f"识别起点: {base_commit[:8]} (匹配度: {score:.2%})")
++        else:
++            logs.append(f"从指纹文件加载起点: {base_commit[:8]}")
+ 
+         pending = dm.get_pending_commits(base_commit)
+ 
+@@ -37,7 +40,7 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
+             "base_commit": base_commit,
+             "pending_commits": pending,
+             "status": "applying" if pending else "completed",
+-            "logs": logs + [f"发现 {len(pending)} 个提交"]
++            "logs": logs + [f"发现 {len(pending)} 个提交"],
+         }
+     except Exception as e:
+-        return {**state, "status": "error", "logs": logs + [f"❌ 错误: {str(e)}"]}
+\ No newline at end of file
++        return {**state, "status": "error", "logs": logs + [f"❌ 错误: {str(e)}"]}
 diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index 25af08c962e68de21ba36aaeb6f44bd1c7325b11..b0b09a651d494e0c7a734ae41c70776c5fa3503f 100644
+index b0b09a651d494e0c7a734ae41c70776c5fa3503f..2c5c260462f1ce8fb0fe61754c0d5c33b3ae9333 100644
 --- a/langchain_code_sync/backend/services/git_manager.py
 +++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -3,7 +3,7 @@ import json
- import os
- from typing import Dict, List, Tuple, Optional
- import hashlib
--# 这是source的注释
-+# 这是source的注释，啊啊啊
+@@ -13,6 +13,29 @@ class DiscoveryManager:
+         # 元数据存放在 RepoB 的根目录下
+         self.metadata_path = os.path.join(repo_b_dir, ".sync_metadata.json")
  
++    def _update_paths(self, local_a: str, local_b: str):
++        """核心方法：转换完路径后，同步更新内部变量"""
++        self.repo_a_dir = local_a
++        self.repo_b_dir = local_b
++        # 只有到了这一步，路径才是正确的 /Users/admin/.git_sync_agent_workspace/...
++        self.metadata_path = os.path.join(local_b, ".sync_metadata.json")
++        print(f"DEBUG: 元数据路径已锁定 -> {self.metadata_path}")
++
++    def load_metadata(self) -> Optional[str]:
++        # 增加防御性检查
++        if not hasattr(self, "metadata_path"):
++            print("DEBUG: 警告！尚未初始化 metadata_path")
++            return None
++
++        if os.path.exists(self.metadata_path):
++            with open(self.metadata_path, "r") as f:
++                data = json.load(f)
++                val = data.get("last_synced_commit_repo_a")
++                print(f"DEBUG: 成功读取元数据文件，起点为: {val}")
++                return val
++        print(f"DEBUG: 未在路径找到元数据文件: {self.metadata_path}")
++        return None
++
+     def run_git(self, args: List[str], cwd: str) -> str:
+         result = subprocess.run(
+             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
+@@ -113,6 +136,12 @@ class DiscoveryManager:
+         return None
  
- class DiscoveryManager:
+     def save_metadata(self, commit_id: str):
++        # 确保路径已经过 _update_paths 初始化
++        if not hasattr(self, "metadata_path"):
++            # 兜底逻辑：如果没初始化，尝试即时生成
++            self.metadata_path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
++
++        print(f"DEBUG: 正在保存元数据到 -> {self.metadata_path}")
+         with open(self.metadata_path, "w") as f:
+             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
+ 
+@@ -263,9 +292,7 @@ class PatchManager:
+     def get_conflict_files(self) -> List[str]:
+         """获取当前冲突的文件列表 (对应报错的修复)"""
+         # 使用 --diff-filter=U 查找未合并(Unmerged)的文件
+-        out = self._run_git_text(
+-            ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
+-        )
++        out = self.run_git(["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir)
+         return out.strip().splitlines()
+ 
+     def get_three_way_content(self, file_path: str) -> Dict[str, str]:
+@@ -281,7 +308,7 @@ class PatchManager:
+         full_path = os.path.join(self.repo_b_dir, file_path)
+         with open(full_path, "w", encoding="utf-8") as f:
+             f.write(final_content)
+-        self._run_git_text(["add", file_path], self.repo_b_dir)
++        self.run_git(["add", file_path], self.repo_b_dir)
+ 
+     def is_all_resolved(self) -> bool:
+         return len(self.get_conflict_files()) == 0

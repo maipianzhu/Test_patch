@@ -15,16 +15,19 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
 
         # 【第二步】非常重要！！
         # 更新 dm 内部的路径为物理路径，否则 dm.find_best_match() 还会去读 URL 导致报错
-        dm.repo_a_dir = local_a
-        dm.repo_b_dir = local_b
-        
+        dm._update_paths(local_a, local_b)
+
         logs.append(f"✅ 仓库已定位至本地 Hash 目录")
 
         # 【第三步】现在执行 Git 操作，cwd 就会是 local_a，不再是 URL
         base_commit = dm.load_metadata()
+
         if not base_commit:
+            logs.append("未发现同步记录，正在扫描指纹...")
             base_commit, score = dm.find_best_match()
-            logs.append(f"识别起点: {base_commit[:8]}")
+            logs.append(f"识别起点: {base_commit[:8]} (匹配度: {score:.2%})")
+        else:
+            logs.append(f"从指纹文件加载起点: {base_commit[:8]}")
 
         pending = dm.get_pending_commits(base_commit)
 
@@ -37,7 +40,7 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
             "base_commit": base_commit,
             "pending_commits": pending,
             "status": "applying" if pending else "completed",
-            "logs": logs + [f"发现 {len(pending)} 个提交"]
+            "logs": logs + [f"发现 {len(pending)} 个提交"],
         }
     except Exception as e:
         return {**state, "status": "error", "logs": logs + [f"❌ 错误: {str(e)}"]}

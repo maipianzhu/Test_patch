@@ -1,50 +1,29 @@
-diff --git a/.gitignore b/.gitignore
-index da9f0be9c43ee02e80c3369416a11af678db494f..f7515be086500c4af1e5189ad0b2669ea1badee6 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -1,15 +1,32 @@
--.env
--./venv
--venv
-+# --- Project Specific ---
- base-grammar
--langchain_code_sync/frontend/node_modules
--**/__pycache__
--langchain_code_sync/backend/checkpoints.db
--langchain_code_sync/backend/checkpoints.db-shm
--langchain_code_sync/backend/checkpoints.db-wal
--**/workspace/*
--langchain_code_sync/backend/workspace/repo_b
--workspace/
--checkpoints.db
- .sync_metadata.json
-+**/workspace/
-+**/checkpoints.db*
-+**/temp_sync.patch
+diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
+index 3127d256ab2846ece83b08af28f1ed300c1d6978..a32317fc3d539e62e5e7773028c8b9723e398eec 100644
+--- a/langchain_code_sync/backend/app/main.py
++++ b/langchain_code_sync/backend/app/main.py
+@@ -8,6 +8,7 @@ from core.graph import create_sync_graph
+ from services.git_manager import PatchManager
+ from fastapi import BackgroundTasks  # 确保导入了后台任务
+ 
 +
-+# --- Environments ---
-+.env
-+.env.local
-+**/venv/
-+**/.venv/
+ # 自动加载 .env 文件 (搜索当前及父级目录)
+ load_dotenv(find_dotenv())
+ 
+@@ -145,6 +146,16 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
+         raise HTTPException(status_code=500, detail=str(e))
+ 
+ 
++@app.post("/sync/confirm_push")
++async def confirm_push(req: SyncRequest, background_tasks: BackgroundTasks):
++    config = {"configurable": {"thread_id": req.thread_id}}
 +
-+# --- Python ---
-+**/__pycache__/
-+*.py[cod]
-+*$py.class
++    # 唤醒图，此时它会进入 push_approval_node 并执行推送
++    background_tasks.add_task(sync_graph.invoke, None, config)
 +
-+# --- Subproject: langchain_code_sync ---
-+langchain_code_sync/backend/data/
-+langchain_code_sync/frontend/node_modules/
-+langchain_code_sync/frontend/dist/
-+langchain_code_sync/frontend/build/
-+langchain_code_sync/frontend/.env.local
++    return {"message": "Pushing to remote..."}
 +
-+# --- General ---
-+*.log
-+.DS_Store
-+.vscode/
-+.idea/
 +
- # 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000
-\ No newline at end of file
+ if __name__ == "__main__":
+     import uvicorn
+ 

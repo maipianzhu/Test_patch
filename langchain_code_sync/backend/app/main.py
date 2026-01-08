@@ -8,6 +8,7 @@ from core.graph import create_sync_graph
 from services.git_manager import PatchManager
 from fastapi import BackgroundTasks  # 确保导入了后台任务
 
+
 # 自动加载 .env 文件 (搜索当前及父级目录)
 load_dotenv(find_dotenv())
 
@@ -143,6 +144,16 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
         print(f"CRITICAL ERROR IN RESOLVE: {str(e)}")
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sync/confirm_push")
+async def confirm_push(req: SyncRequest, background_tasks: BackgroundTasks):
+    config = {"configurable": {"thread_id": req.thread_id}}
+
+    # 唤醒图，此时它会进入 push_approval_node 并执行推送
+    background_tasks.add_task(sync_graph.invoke, None, config)
+
+    return {"message": "Pushing to remote..."}
 
 
 if __name__ == "__main__":

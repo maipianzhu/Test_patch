@@ -93,25 +93,38 @@ async def get_status(thread_id: str):
 
 @app.post("/sync/resolve")
 async def resolve_conflict(req: ResolveRequest):
-    """
-    用户提交手动合并的结果，并恢复执行
-    """
     config = {"configurable": {"thread_id": req.thread_id}}
 
-    # 1. 获取当前状态以获取仓库路径
-    current_state = sync_graph.get_state(config).values
+    # 1. 从 LangGraph 获取当前任务的最新状态（里面存有 local_a_dir 和 local_b_dir）
+    state_snapshot = sync_graph.get_state(config)
+    if not state_snapshot.values:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    current_state = state_snapshot.values
+
+    # 2. ！！！关键点：必须使用 state 里的本地物理路径！！！
     pm = PatchManager(current_state["repo_a_dir"], current_state["repo_b_dir"])
 
-    # 2. 将修好的代码写入物理文件并执行 git add
-    pm.resolve_file_manually(req.file_path, req.content)
+    # 3. 执行写入操作
+    try:
+        pm.resolve_file_manually(req.file_path, req.content)
 
-    # 3. 如果所有冲突文件都修好了，恢复图的运行
-    if pm.is_all_resolved():
-        # 传入 None 表示从上次中断的 human_review 节点直接继续
-        sync_graph.invoke(None, config)
-        return {"status": "resumed", "message": "冲突已解决，流水线继续"}
+        # 4. 如果所有冲突都修好了，尝试让 LangGraph 继续运行
+        if pm.is_all_resolved():
+            # 唤醒图，传入 None 表示从 interrupt 处恢复
+            sync_graph.invoke(None, config)
+            return {
+                "status": "resumed",
+                "message": "All conflicts resolved, proceeding...",
+            }
 
-    return {"status": "pending", "message": "文件已保存，等待其他冲突解决"}
+        return {
+            "status": "pending",
+            "message": "File saved, waiting for other files...",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

@@ -1,166 +1,100 @@
 import subprocess
 import json
 import os
-from typing import Dict, List, Tuple, Optional
 import hashlib
-# 这是source的注释，啊啊啊
+from typing import Dict, List, Tuple, Optional
 
 
 class DiscoveryManager:
     def __init__(self, repo_a_dir: str, repo_b_dir: str):
         self.repo_a_dir = repo_a_dir
         self.repo_b_dir = repo_b_dir
-        # 元数据存放在 RepoB 的根目录下
-        self.metadata_path = os.path.join(repo_b_dir, ".sync_metadata.json")
 
     def _update_paths(self, local_a: str, local_b: str):
-        """核心方法：转换完路径后，同步更新内部变量"""
+        """转换路径后更新变量"""
         self.repo_a_dir = local_a
         self.repo_b_dir = local_b
-        # 只有到了这一步，路径才是正确的 /Users/admin/.git_sync_agent_workspace/...
         self.metadata_path = os.path.join(local_b, ".sync_metadata.json")
-        print(f"DEBUG: 元数据路径已锁定 -> {self.metadata_path}")
-
-    def load_metadata(self) -> Optional[str]:
-        # 增加防御性检查
-        if not hasattr(self, "metadata_path"):
-            print("DEBUG: 警告！尚未初始化 metadata_path")
-            return None
-
-        if os.path.exists(self.metadata_path):
-            with open(self.metadata_path, "r") as f:
-                data = json.load(f)
-                val = data.get("last_synced_commit_repo_a")
-                print(f"DEBUG: 成功读取元数据文件，起点为: {val}")
-                return val
-        print(f"DEBUG: 未在路径找到元数据文件: {self.metadata_path}")
-        return None
 
     def run_git(self, args: List[str], cwd: str) -> str:
+        """Discovery 专用的文本模式命令"""
         result = subprocess.run(
             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
         )
-        if result.returncode != 0:
-            return ""  # 或者抛出异常，视情况而定
-        return result.stdout
+        return result.stdout if result.returncode == 0 else ""
 
-    def _get_unique_repo_path(self, url: str) -> str:
-        """
-        根据 URL 生成唯一的文件夹路径
-        """
-        # 使用 SHA256 生成哈希值（取前 12 位即可保证极低碰撞率）
-        url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
-
-        # 提取仓库名（例如 https://github.com/user/project.git -> project）
-        repo_name = url.split("/")[-1].replace(".git", "")
-
-        home = os.path.expanduser("~")
-        workspace = os.path.join(home, ".git_sync_agent_workspace")
-
-        # 最终文件夹名格式：project_a1b2c3d4e5f6
-        return os.path.join(workspace, f"{repo_name}_{url_hash}")
-
-    def ensure_local_repo(self, path_or_url: str, name: str) -> str:
-        """
-        name 参数在此方案中将不再作为文件夹名，仅作为日志标识
-        """
+    def ensure_local_repo(self, path_or_url: str, name_hint: str) -> str:
+        """URL 转 Hash 路径并克隆/同步"""
         if path_or_url.startswith(("http", "git@")):
-            local_path = self._get_unique_repo_path(path_or_url)
+            url_hash = hashlib.sha256(path_or_url.encode("utf-8")).hexdigest()[:12]
+            repo_name = path_or_url.split("/")[-1].replace(".git", "")
+            home = os.path.expanduser("~")
+            workspace = os.path.join(home, ".git_sync_agent_workspace")
+            local_path = os.path.join(workspace, f"{repo_name}_{url_hash}")
 
-            os.makedirs(os.path.dirname(local_path), exist_ok=True)
-
+            os.makedirs(workspace, exist_ok=True)
             if not os.path.exists(local_path):
-                print(f"检测到新仓库，正在克隆: {path_or_url}")
                 subprocess.run(["git", "clone", path_or_url, local_path], check=True)
             else:
-                print(f"命中本地缓存，正在同步远程状态: {local_path}")
-                # 执行 fetch + reset 逻辑对齐远程
                 subprocess.run(["git", "fetch", "origin"], cwd=local_path, check=True)
-
-                # 动态获取当前远程分支名
-                try:
-                    # 尝试获取默认分支
-                    res = subprocess.run(
-                        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
-                        cwd=local_path,
-                        capture_output=True,
-                        text=True,
-                    )
-                    branch = res.stdout.strip().split("/")[-1]
-                except:
-                    branch = "main"  # 兜底
-
+                # 自动获取远程主分支名并重置
+                res = subprocess.run(
+                    ["git", "remote", "show", "origin"],
+                    cwd=local_path,
+                    capture_output=True,
+                    text=True,
+                )
+                branch = "main" if "HEAD branch: main" in res.stdout else "master"
                 subprocess.run(
                     ["git", "reset", "--hard", f"origin/{branch}"],
                     cwd=local_path,
                     check=True,
                 )
-                subprocess.run(["git", "clean", "-fd"], cwd=local_path, check=True)
-
             return local_path
         return os.path.abspath(path_or_url)
 
-    def get_fingerprint(self, cwd: str, commit_ish: str = "HEAD") -> Dict[str, str]:
-        output = self.run_git(["ls-tree", "-r", commit_ish], cwd)
-        fingerprint = {}
-        for line in output.splitlines():
-            parts = line.split(maxsplit=3)
-            if len(parts) >= 4:
-                fingerprint[parts[3]] = parts[2]
-        return fingerprint
+    def load_metadata(self) -> Optional[str]:
+        if hasattr(self, "metadata_path") and os.path.exists(self.metadata_path):
+            with open(self.metadata_path, "r") as f:
+                return json.load(f).get("last_synced_commit_repo_a")
+        return None
 
     def find_best_match(self, max_search_depth: int = 100) -> Tuple[str, float]:
-        target_fp = self.get_fingerprint(self.repo_b_dir)
-        if not target_fp:
-            return "", 0.0
-
+        # 指纹识别逻辑... (保持你之前的逻辑，使用 self.run_git)
+        target_fp = self._get_fingerprint(self.repo_b_dir)
         commits = self.run_git(
             ["rev-list", "HEAD", f"--max-count={max_search_depth}"], self.repo_a_dir
         ).splitlines()
         best_commit, max_score = "", -1.0
-
         for cid in commits:
-            a_fp = self.get_fingerprint(self.repo_a_dir, cid)
+            a_fp = self._get_fingerprint(self.repo_a_dir, cid)
             matches = sum(1 for p, h in target_fp.items() if a_fp.get(p) == h)
-            score = matches / len(target_fp)
+            score = matches / len(target_fp) if target_fp else 0
             if score >= 1.0:
                 return cid, 1.0
             if score > max_score:
                 max_score, best_commit = score, cid
         return best_commit, max_score
 
-    def load_metadata(self) -> Optional[str]:
-        if os.path.exists(self.metadata_path):
-            with open(self.metadata_path, "r") as f:
-                return json.load(f).get("last_synced_commit_repo_a")
-        return None
-
-    def save_metadata(self, commit_id: str):
-        # 确保路径已经过 _update_paths 初始化
-        if not hasattr(self, "metadata_path"):
-            # 兜底逻辑：如果没初始化，尝试即时生成
-            self.metadata_path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
-
-        print(f"DEBUG: 正在保存元数据到 -> {self.metadata_path}")
-        with open(self.metadata_path, "w") as f:
-            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
+    def _get_fingerprint(self, cwd: str, commit_ish: str = "HEAD"):
+        out = self.run_git(["ls-tree", "-r", commit_ish], cwd)
+        return {
+            l.split(maxsplit=3)[3]: l.split(maxsplit=3)[2]
+            for l in out.splitlines()
+            if len(l.split()) >= 4
+        }
 
     def get_pending_commits(self, base_commit: str) -> List[str]:
-        """
-        获取从 base 到 远程最新提交 之间的所有 commit id
-        """
-        # 1. 首先确保本地已经拿到了远程的最新的提交信息
         self.run_git(["fetch", "origin"], self.repo_a_dir)
-
-        # 2. 对比时，使用 origin/main (或者你指定的远程分支名) 而不是 HEAD
-        # 这样才能发现你在 GitHub 上新提交的代码
-        remote_branch = "origin/main"  # 假设主分支是 main
-
-        output = self.run_git(
-            ["rev-list", f"{base_commit}..{remote_branch}", "--reverse"],
-            self.repo_a_dir,
+        out = self.run_git(
+            ["rev-list", f"{base_commit}..origin/main", "--reverse"], self.repo_a_dir
         )
-        return output.splitlines() if output else []
+        if not out:  # 尝试 master 兜底
+            out = self.run_git(
+                ["rev-list", f"{base_commit}..origin/master", "--reverse"],
+                self.repo_a_dir,
+            )
+        return out.splitlines() if out else []
 
 
 class PatchManager:
@@ -168,19 +102,22 @@ class PatchManager:
         self.repo_a_dir = repo_a_dir
         self.repo_b_dir = repo_b_dir
 
-    def run_git(self, args: List[str], cwd: str) -> str:
-        result = subprocess.run(
+    def _run_git_raw(self, args: List[str], cwd: str) -> bytes:
+        """二进制模式运行，专门用于 Patch"""
+        return subprocess.run(
+            ["git"] + args, cwd=cwd, capture_output=True, text=False
+        ).stdout
+
+    def _run_git_text(self, args: List[str], cwd: str) -> str:
+        """文本模式运行，用于 log/commit"""
+        res = subprocess.run(
             ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8"
         )
-        # 核心修改：移除 .strip()，原样返回输出以保护补丁格式
-        return result.stdout
+        return res.stdout
 
-    def generate_patch(self, commit_id: str) -> str:
-        """
-        生成补丁，移除末尾多余的 strip
-        """
-        # 注意：这里也移除了末尾的 .strip()
-        return self.run_git(
+    def generate_patch(self, commit_id: str) -> bytes:
+        """生成二进制补丁"""
+        return self._run_git_raw(
             [
                 "show",
                 commit_id,
@@ -193,24 +130,22 @@ class PatchManager:
                 ".",
                 ":!workspace",
                 ":!**/workspace/**",
-                ":!backend/workspace",
                 ":!checkpoints.db*",
             ],
             self.repo_a_dir,
         )
 
-    def apply_patch_attempt(self, patch_content: str) -> Tuple[bool, str]:
-        # 增加校验，防止传入空字符串
-        if not patch_content or not patch_content.strip():
-            return True, "Empty patch"
-
+    def apply_patch_attempt(self, patch_bytes: bytes) -> Tuple[bool, str]:
+        """关键修复：使用 wb 模式写入字节流"""
+        if not patch_bytes or len(patch_bytes) < 10:
+            return True, ""
         patch_path = os.path.join(self.repo_b_dir, "temp_sync.patch")
-        # 使用 newline='' 确保换行符不被系统修改（跨平台兼容）
-        with open(patch_path, "w", encoding="utf-8", newline="") as f:
-            f.write(patch_content)
 
-        all_errors = []
-        # 增加 --recount 参数，这会让 Git 尝试自动修正小的格式错误
+        # --- 核心修复：wb 代表 write binary ---
+        with open(patch_path, "wb") as f:
+            f.write(patch_bytes)
+
+        errors = []
         for p_level in ["1", "2"]:
             try:
                 subprocess.run(
@@ -228,87 +163,76 @@ class PatchManager:
                     text=True,
                     check=True,
                 )
-                print(f"DEBUG: 使用 -p{p_level} 成功应用补丁")
                 return True, ""
             except subprocess.CalledProcessError as e:
-                all_errors.append(f"[-p{p_level}] {e.stderr}")
-
-        return False, "\n".join(all_errors)
-
-    def get_commit_metadata(self, commit_id: str) -> Dict[str, str]:
-        # 在这里手动 strip 结果，因为元数据需要清理空格
-        author_name = self.run_git(
-            ["log", "-1", "--format=%an", commit_id], self.repo_a_dir
-        ).strip()
-        author_email = self.run_git(
-            ["log", "-1", "--format=%ae", commit_id], self.repo_a_dir
-        ).strip()
-        subject = self.run_git(
-            ["log", "-1", "--format=%s", commit_id], self.repo_a_dir
-        ).strip()
-        body = self.run_git(["log", "-1", "--format=%b", commit_id], self.repo_a_dir)
-
-        return {
-            "author": f"{author_name} <{author_email}>",
-            "message": f"{subject}\n\n{body}".strip(),
-        }
-
-    # ... 其余方法保持不变，但确保调用 run_git 后如果需要处理路径名，手动加上 .strip() ...
-
-    def commit_with_metadata(self, metadata: Dict[str, str]):
-        """
-        在 RepoB 中使用指定的元数据提交代码
-        """
-        # 1. 先 git add
-        self.run_git(["add", "."], self.repo_b_dir)
-
-        # 2. 构造 commit 命令，指定作者
-        # --author="Name <email>" 可以伪造/还原原作者
-        cmd = [
-            "commit",
-            f"--author={metadata['author']}",
-            "-m",
-            metadata["message"],
-            "--no-verify",  # 跳过可能的 pre-commit hook
-        ]
-        self.run_git(cmd, self.repo_b_dir)
-
-    def push_to_remote(self):
-        """
-        将本地工作区的改动推送到远程仓库
-        """
-        # 这里的 origin 是 git clone 时默认建立的远程引用
-        # HEAD 代表推送当前分支
-        result = subprocess.run(
-            ["git", "push", "origin", "HEAD"],
-            cwd=self.repo_b_dir,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise Exception(f"推送远程仓库失败: {result.stderr}")
-        return result.stdout
+                errors.append(e.stderr)
+        return False, "\n".join(errors)
 
     def get_conflict_files(self) -> List[str]:
-        """获取当前冲突的文件列表 (对应报错的修复)"""
-        # 使用 --diff-filter=U 查找未合并(Unmerged)的文件
-        out = self.run_git(["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir)
+        out = self._run_git_text(
+            ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
+        )
         return out.strip().splitlines()
 
     def get_three_way_content(self, file_path: str) -> Dict[str, str]:
-        """提取冲突文件的三个阶段内容"""
         contents = {}
         for stage, label in [("1", "base"), ("2", "ours"), ("3", "theirs")]:
-            # 使用二进制读取再解码，防止特殊字符导致崩溃
             raw = self._run_git_raw(["show", f":{stage}:{file_path}"], self.repo_b_dir)
             contents[label] = raw.decode("utf-8", errors="replace")
         return contents
 
+    def get_commit_metadata(self, commit_id: str) -> Dict[str, str]:
+        author = self._run_git_text(
+            ["log", "-1", "--format=%an <%ae>", commit_id], self.repo_a_dir
+        ).strip()
+        msg = self._run_git_text(
+            ["log", "-1", "--format=%B", commit_id], self.repo_a_dir
+        ).strip()
+        return {"author": author, "message": msg}
+
+    def commit_with_metadata(self, metadata: Dict[str, str]):
+        self._run_git_text(["add", "."], self.repo_b_dir)
+        self._run_git_text(
+            [
+                "commit",
+                f"--author={metadata['author']}",
+                "-m",
+                metadata["message"],
+                "--no-verify",
+            ],
+            self.repo_b_dir,
+        )
+
+    def save_metadata(self, commit_id: str):
+        path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
+        with open(path, "w") as f:
+            json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
+
+    def push_to_remote(self):
+        subprocess.run(
+            ["git", "push", "origin", "HEAD", "--force"],
+            cwd=self.repo_b_dir,
+            check=True,
+        )
+
     def resolve_file_manually(self, file_path: str, final_content: str):
+        """
+        将用户在 UI 上修好的代码写入物理文件，并标记为已解决（git add）
+        """
+        # 1. 确定文件的绝对路径
         full_path = os.path.join(self.repo_b_dir, file_path)
+
+        # 2. 写入用户修改后的内容（使用 utf-8 文本模式）
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(final_content)
-        self.run_git(["add", file_path], self.repo_b_dir)
+
+        # 3. 执行 git add 将文件标记为已解决冲突状态
+        # 确保你使用的是类中定义的运行 git 的方法（例如 _run_git_text 或 run_git）
+        # 这里建议调用内部定义的命令执行函数
+        self._run_git_text(["add", file_path], self.repo_b_dir)
+        print(f"DEBUG: 已手动解决并 add 文件: {file_path}")
 
     def is_all_resolved(self) -> bool:
+        """检查是否所有冲突都已经 git add 过了"""
+        # 如果 get_conflict_files 返回空列表，说明没有处于 Unmerged 状态的文件了
         return len(self.get_conflict_files()) == 0

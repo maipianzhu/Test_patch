@@ -1,13 +1,26 @@
-diff --git a/langchain_code_sync/backend/core/nodes/discovery.py b/langchain_code_sync/backend/core/nodes/discovery.py
-index ee3ee7b94725af0f2d6377a52b521fc60844a91b..128085a68c2f0dd7179a91f610321b770b60449c 100644
---- a/langchain_code_sync/backend/core/nodes/discovery.py
-+++ b/langchain_code_sync/backend/core/nodes/discovery.py
-@@ -17,7 +17,7 @@ def discover_origin_node(state: SyncState) -> Dict[str, Any]:
-         # 更新 dm 内部的路径为物理路径，否则 dm.find_best_match() 还会去读 URL 导致报错
-         dm._update_paths(local_a, local_b)
+diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
+index 6f988f50189768eda5ff4827eab8894af632eeaf..97469de6da3a76004750726ddccd8f0132a28279 100644
+--- a/langchain_code_sync/backend/services/git_manager.py
++++ b/langchain_code_sync/backend/services/git_manager.py
+@@ -79,9 +79,9 @@ class DiscoveryManager:
+     def _get_fingerprint(self, cwd: str, commit_ish: str = "HEAD"):
+         out = self.run_git(["ls-tree", "-r", commit_ish], cwd)
+         return {
+-            l.split(maxsplit=3)[3]: l.split(maxsplit=3)[2]
+-            for l in out.splitlines()
+-            if len(l.split()) >= 4
++            line.split(maxsplit=3)[3]: line.split(maxsplit=3)[2]
++            for line in out.splitlines()
++            if len(line.split()) >= 4
+         }
  
--        logs.append(f"✅ 仓库已定位至本地 Hash 目录")
-+        logs.append("✅ 仓库已定位至本地 Hash 目录")
+     def get_pending_commits(self, base_commit: str) -> List[str]:
+@@ -243,7 +243,7 @@ class PatchManager:
  
-         # 【第三步】现在执行 Git 操作，cwd 就会是 local_a，不再是 URL
-         base_commit = dm.load_metadata()
+     def resolve_file_manually(self, file_path: str, final_content: str):
+         """
+-        将用户在 UI 上修好的代码写入物理文件，并标记为已解决（git add）
++        将用户在 UI 上修好的代码写入物理文件,并标记为已解决(git add)
+         """
+         # 1. 确定文件的绝对路径
+         full_path = os.path.join(self.repo_b_dir, file_path)

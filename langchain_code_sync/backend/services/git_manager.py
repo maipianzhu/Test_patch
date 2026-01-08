@@ -79,9 +79,9 @@ class DiscoveryManager:
     def _get_fingerprint(self, cwd: str, commit_ish: str = "HEAD"):
         out = self.run_git(["ls-tree", "-r", commit_ish], cwd)
         return {
-            l.split(maxsplit=3)[3]: l.split(maxsplit=3)[2]
-            for l in out.splitlines()
-            if len(l.split()) >= 4
+            line.split(maxsplit=3)[3]: line.split(maxsplit=3)[2]
+            for line in out.splitlines()
+            if len(line.split()) >= 4
         }
 
     def get_pending_commits(self, base_commit: str) -> List[str]:
@@ -243,7 +243,7 @@ class PatchManager:
 
     def resolve_file_manually(self, file_path: str, final_content: str):
         """
-        将用户在 UI 上修好的代码写入物理文件，并标记为已解决（git add）
+        将用户在 UI 上修好的代码写入物理文件,并标记为已解决(git add)
         """
         # 1. 确定文件的绝对路径
         full_path = os.path.join(self.repo_b_dir, file_path)

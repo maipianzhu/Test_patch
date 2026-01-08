@@ -1,15 +1,32 @@
-.env
-./venv
-venv
+# --- Project Specific ---
 base-grammar
-langchain_code_sync/frontend/node_modules
-**/__pycache__
-langchain_code_sync/backend/checkpoints.db
-langchain_code_sync/backend/checkpoints.db-shm
-langchain_code_sync/backend/checkpoints.db-wal
-**/workspace/*
-langchain_code_sync/backend/workspace/repo_b
-workspace/
-checkpoints.db
 .sync_metadata.json
+**/workspace/
+**/checkpoints.db*
+**/temp_sync.patch
+
+# --- Environments ---
+.env
+.env.local
+**/venv/
+**/.venv/
+
+# --- Python ---
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# --- Subproject: langchain_code_sync ---
+langchain_code_sync/backend/data/
+langchain_code_sync/frontend/node_modules/
+langchain_code_sync/frontend/dist/
+langchain_code_sync/frontend/build/
+langchain_code_sync/frontend/.env.local
+
+# --- General ---
+*.log
+.DS_Store
+.vscode/
+.idea/
+
 # 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000

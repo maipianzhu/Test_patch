@@ -111,7 +111,8 @@ class DiscoveryManager:
             print("DEBUG: save_metadata 路径异常，尝试自动定位...")
 
         path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
-        print(f"DEBUG: 正在保存元数据 -> {path}")
+        with open("debug.log", "a") as f:
+            f.write(f"DEBUG: 正在保存元数据 -> {path} (commit: {commit_id[:8]})\n")
 
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
@@ -235,11 +236,21 @@ class PatchManager:
             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
 
     def push_to_remote(self):
-        subprocess.run(
+        with open("debug.log", "a") as f:
+            f.write(f"DEBUG: Executing git push in {self.repo_b_dir}\n")
+        res = subprocess.run(
             ["git", "push", "origin", "HEAD", "--force"],
             cwd=self.repo_b_dir,
-            check=True,
+            capture_output=True,
+            text=True,
         )
+        with open("debug.log", "a") as f:
+            f.write(f"DEBUG: Git push stdout: {res.stdout}\n")
+            f.write(f"DEBUG: Git push stderr: {res.stderr}\n")
+            f.write(f"DEBUG: Git push returncode: {res.returncode}\n")
+
+        if res.returncode != 0:
+            raise Exception(f"Git push failed: {res.stderr}")
 
     def resolve_file_manually(self, file_path: str, final_content: str):
         """

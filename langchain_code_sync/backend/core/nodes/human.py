@@ -21,6 +21,8 @@ def human_review_node(state: SyncState) -> Dict[str, Any]:
 
 
 def push_approval_node(state: SyncState):
+    with open("debug.log", "a") as f:
+        f.write(f"DEBUG: Entering push_approval_node, status={state.get('status')}\n")
     pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
     dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
 

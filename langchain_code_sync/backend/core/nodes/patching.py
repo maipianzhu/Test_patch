@@ -4,6 +4,10 @@ from services.git_manager import PatchManager, DiscoveryManager
 
 
 def apply_patch_node(state: SyncState) -> Dict[str, Any]:
+    with open("debug.log", "a") as f:
+        f.write(
+            f"DEBUG: Entering apply_patch_node, status={state.get('status')}, index={state.get('current_commit_index')}\n"
+        )
     """
     补丁应用节点：负责逐个应用补丁，处理成功提交及冲突提取。
     """

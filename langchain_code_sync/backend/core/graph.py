@@ -32,7 +32,7 @@ def create_sync_graph():
     # 5. 定义条件路由 (最核心的决策逻辑)
     def router_after_patch(state: SyncState):
         """决定 apply_patch 之后去哪"""
-        if state["status"] == "awaiting_push":
+        if state["status"] in ["awaiting_push", "pushing"]:
             return "approve"
         if state["status"] == "completed":
             return "end"

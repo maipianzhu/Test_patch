@@ -161,6 +161,9 @@ async def confirm_push(req: ThreadRequest, background_tasks: BackgroundTasks):
 
     # 1. 【核心修复】标记一个正在推送的临时状态，避免前端轮询到旧的 awaiting_push
     # 我们把状态改为一个中间态 'pushing'，并添加一条明确的日志
+    with open("debug.log", "a") as f:
+        f.write(f"DEBUG: confirm_push called for thread {req.thread_id}\n")
+
     sync_graph.update_state(
         config,
         {
@@ -171,7 +174,20 @@ async def confirm_push(req: ThreadRequest, background_tasks: BackgroundTasks):
     )
 
     # 2. 唤醒图运行 push_approval 节点
-    background_tasks.add_task(sync_graph.invoke, None, config)
+    def run_invoke():
+        try:
+            with open("debug.log", "a") as f:
+                f.write(f"DEBUG: Invoking graph for thread {req.thread_id}\n")
+            sync_graph.invoke(None, config)
+            with open("debug.log", "a") as f:
+                f.write(
+                    f"DEBUG: Graph invocation finished for thread {req.thread_id}\n"
+                )
+        except Exception as e:
+            with open("debug.log", "a") as f:
+                f.write(f"ERROR: Graph invocation failed: {str(e)}\n")
+
+    background_tasks.add_task(run_invoke)
 
     return {"status": "ok"}
 

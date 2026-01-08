@@ -58,11 +58,15 @@ async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
         "repo_a_dir": req.repo_a_dir,
         "repo_b_dir": req.repo_b_dir,
         "current_commit_index": 0,
+        "pending_commits": [],  # 必须清空待处理列表
         "logs": ["任务已进入后台执行队列..."],
         "has_conflict": False,
         "conflicts": [],
         "status": "analyzing",
     }
+
+    # 2. 【核心修复】强制更新状态，将该 thread_id 的进度拨回起点
+    sync_graph.update_state(config, initial_state)
 
     # 定义一个后台运行的函数
     def run_workflow():

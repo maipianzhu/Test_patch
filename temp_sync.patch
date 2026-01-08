@@ -1,162 +1,45 @@
 diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
-index 2ff0d18f28b47f649eacc392cb9506b65f4f7380..07ac0c968ae3870df4ef2d487af601d5d4bbeebb 100644
+index 07ac0c968ae3870df4ef2d487af601d5d4bbeebb..8b8e0472e6219bb3eb9f2ebf1cd814bf50d76645 100644
 --- a/langchain_code_sync/backend/app/main.py
 +++ b/langchain_code_sync/backend/app/main.py
-@@ -115,13 +115,13 @@ async def resolve_conflict(req: ResolveRequest, background_tasks: BackgroundTask
-             idx = current_state["current_commit_index"]
-             cid = current_state["pending_commits"][idx]
+@@ -58,12 +58,16 @@ async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
+         "repo_a_dir": req.repo_a_dir,
+         "repo_b_dir": req.repo_b_dir,
+         "current_commit_index": 0,
++        "pending_commits": [],  # 必须清空待处理列表
+         "logs": ["任务已进入后台执行队列..."],
+         "has_conflict": False,
+         "conflicts": [],
+         "status": "analyzing",
+     }
  
-+            # 更新元数据文件 (使用 PatchManager 里的方法)
-+            pm.save_metadata(cid)
++    # 2. 【核心修复】强制更新状态，将该 thread_id 的进度拨回起点
++    sync_graph.update_state(config, initial_state)
 +
-             # 获取元数据并提交
-             metadata = pm.get_commit_metadata(cid)
-             pm.commit_with_metadata(metadata)
- 
--            # 更新元数据文件 (使用 PatchManager 里的方法)
--            pm.save_metadata(cid)
--
-             # 手动更新状态机进度
-             sync_graph.update_state(
-                 config,
-diff --git a/langchain_code_sync/backend/core/nodes/patching.py b/langchain_code_sync/backend/core/nodes/patching.py
-index aca01395a073acc7e1e8d6db06dc617ca4d31367..cce80c6ce4e082dae0e54bd936517fc4dad7d92d 100644
---- a/langchain_code_sync/backend/core/nodes/patching.py
-+++ b/langchain_code_sync/backend/core/nodes/patching.py
-@@ -1,36 +1,53 @@
- from typing import Any, Dict
- from core.state import SyncState
--
--# 关键：统一在顶部导入
- from services.git_manager import PatchManager, DiscoveryManager
- 
- 
- def apply_patch_node(state: SyncState) -> Dict[str, Any]:
-+    """
-+    补丁应用节点：负责逐个应用补丁，处理成功提交及冲突提取。
-+    """
-     idx = state["current_commit_index"]
-     pending = state["pending_commits"]
- 
--    # --- 1. 立即初始化所有 Manager，确保任何分支都能访问 ---
-+    # --- 1. 初始化 Manager (放置在函数顶部，防止 UnboundLocalError) ---
-+    # 这里的 repo_a_dir 和 repo_b_dir 已经是 discovery 节点转换后的本地物理路径
-     pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
-     dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
--    # 确保 dm 内部的元数据路径已经更新为物理路径
-+    # 确保 dm 内部路径已同步（用于 save_metadata）
-     dm._update_paths(state["repo_a_dir"], state["repo_b_dir"])
- 
--    # --- 2. 检查任务是否已经完成 ---
-+    # --- 2. 检查任务是否已经全部完成 ---
-     if idx >= len(pending):
+     # 定义一个后台运行的函数
+     def run_workflow():
          try:
--            # 获取 Repo A 真正的远程 HEAD (311eb8d)
-+            state["logs"].append("正在进行最终对齐并推送到远程...")
+diff --git a/langchain_code_sync/frontend/src/App.tsx b/langchain_code_sync/frontend/src/App.tsx
+index d7c4459efcbe66b923cfc819221c44f486c565e5..4b99fbca946e8ecbd3e51903bc8e372c3197444a 100644
+--- a/langchain_code_sync/frontend/src/App.tsx
++++ b/langchain_code_sync/frontend/src/App.tsx
+@@ -55,8 +55,18 @@ function App() {
+     }, [isPolling, threadId, state?.status]); // 增加 state.status 作为依赖项
+ 
+     const startSync = async () => {
++        // 1. 【核心修复】立即给用户反馈，清空旧的日志和状态
++        setState(null);
 +
-+            # 获取 Repo A 真正的远程 HEAD ID (例如 354b2ceb)
-             latest_a_id = dm.get_remote_head()
--            # 保存到指纹文件，确保下次同步对齐
+         setIsPolling(true);
+-        await syncApi.start(repoA, repoB, threadId);
 +
-+            # A. 先写入元数据文件
-             dm.save_metadata(latest_a_id)
++        try {
++            await syncApi.start(repoA, repoB, threadId);
++        } catch (e) {
++            console.error("启动失败", e);
++            alert("启动失败，请检查后端");
++            setIsPolling(false);
++        }
+     };
  
--            # 推送到远程 Repo B
-+            # B. 必须执行一次提交，把这个 JSON 变动同步进 Repo B 的历史
-+            pm._run_git_text(["add", ".sync_metadata.json"], state["repo_b_dir"])
-+            # 检查是否有变动需要提交，防止空提交报错
-+            status_out = pm._run_git_text(
-+                ["status", "--porcelain"], state["repo_b_dir"]
-+            )
-+            if status_out.strip():
-+                pm._run_git_text(
-+                    ["commit", "-m", f"chore: 最终同步起点对齐至 {latest_a_id[:8]}"],
-+                    state["repo_b_dir"],
-+                )
-+
-+            # C. 推送到远程
-             pm.push_to_remote()
- 
-             return {
-                 **state,
-                 "status": "completed",
-                 "logs": state["logs"]
--                + [f"🚀 所有补丁同步完成，终点对齐至: {latest_a_id[:8]}"],
-+                + [f"🚀 所有补丁同步完成，终点已对齐至: {latest_a_id[:8]}"],
-             }
-         except Exception as e:
-             return {
-@@ -42,20 +59,24 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
- 
-     # --- 3. 正常应用补丁逻辑 ---
-     current_cid = pending[idx]
-+    state["logs"].append(f"正在处理补丁 ({idx + 1}/{len(pending)}): {current_cid[:8]}")
- 
--    # 获取元数据
-+    # A. 获取原提交元数据（作者、消息）
-     metadata = pm.get_commit_metadata(current_cid)
- 
--    # 生成并应用补丁
-+    # B. 生成二进制补丁并尝试应用
-     patch_bytes = pm.generate_patch(current_cid)
-     success, error_log = pm.apply_patch_attempt(patch_bytes)
- 
-     if success:
--        # 应用成功：提交并记录作者历史
--        pm.commit_with_metadata(metadata)
--        # 单步更新元数据文件
-+        # --- 核心改进：调整顺序 ---
-+        # 1. 先保存元数据到磁盘文件
-         dm.save_metadata(current_cid)
- 
-+        # 2. 再执行 commit（内部包含 git add .）
-+        # 这样刚才修改的 .sync_metadata.json 就会和代码改动一起被提交
-+        pm.commit_with_metadata(metadata)
-+
-         return {
-             **state,
-             "current_commit_index": idx + 1,
-@@ -64,22 +85,19 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
-             "logs": state["logs"] + [f"✅ 同步完成: {metadata['message'][:40]}..."],
-         }
-     else:
--        # 5. 冲突处理逻辑
-+        # --- 4. 冲突处理逻辑 ---
-         conflict_files = pm.get_conflict_files()
- 
--        # 如果 apply 失败了，但 git 并没有在索引中生成未合并文件
-         if not conflict_files:
--            # 打印前 10 行补丁内容，检查文件路径是否正确
--            print(f"DEBUG: Patch Head -> {patch_content[:500]}")
--            print(f"DEBUG: Error Log -> {error_log}")
-+            # 如果 apply 失败但没产生冲突标记（通常是路径深度或格式问题）
-+            # 我们选择停下来报错，而不是盲目跳过
-             return {
-                 **state,
-                 "status": "error",
--                "logs": state["logs"]
--                + [f"❌ 补丁应用彻底失败（无法自动处理）: {error_log[:200]}"],
-+                "logs": state["logs"] + [f"❌ 补丁应用彻底失败: {error_log[:200]}"],
-             }
- 
--        # 提取冲突内容供 UI 显示
-+        # 提取冲突内容供前端三栏编辑器使用
-         all_conflicts = []
-         for f_path in conflict_files:
-             three_way = pm.get_three_way_content(f_path)
-@@ -89,7 +107,7 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
-                     "base_content": three_way["base"],
-                     "ours_content": three_way["ours"],
-                     "theirs_content": three_way["theirs"],
--                    "ai_suggestion": None,
-+                    "ai_suggestion": None,  # 留给下一个 ai_expert 节点处理
-                 }
-             )
- 
-@@ -98,5 +116,5 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
-             "has_conflict": True,
-             "conflicts": all_conflicts,
-             "status": "conflicted",
--            "logs": state["logs"] + [f"🚧 冲突发生: {current_cid[:8]}，请人工裁决"],
-+            "logs": state["logs"] + [f"🚧 冲突发生于 {current_cid[:8]}，请人工裁决"],
-         }
+     return (

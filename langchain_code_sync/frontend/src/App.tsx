@@ -55,8 +55,18 @@ function App() {
     }, [isPolling, threadId, state?.status]); // 增加 state.status 作为依赖项
 
     const startSync = async () => {
+        // 1. 【核心修复】立即给用户反馈，清空旧的日志和状态
+        setState(null);
+
         setIsPolling(true);
-        await syncApi.start(repoA, repoB, threadId);
+
+        try {
+            await syncApi.start(repoA, repoB, threadId);
+        } catch (e) {
+            console.error("启动失败", e);
+            alert("启动失败，请检查后端");
+            setIsPolling(false);
+        }
     };
 
     return (

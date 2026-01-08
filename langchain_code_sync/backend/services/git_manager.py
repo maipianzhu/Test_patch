@@ -259,3 +259,29 @@ class PatchManager:
         if result.returncode != 0:
             raise Exception(f"推送远程仓库失败: {result.stderr}")
         return result.stdout
+
+    def get_conflict_files(self) -> List[str]:
+        """获取当前冲突的文件列表 (对应报错的修复)"""
+        # 使用 --diff-filter=U 查找未合并(Unmerged)的文件
+        out = self._run_git_text(
+            ["diff", "--name-only", "--diff-filter=U"], self.repo_b_dir
+        )
+        return out.strip().splitlines()
+
+    def get_three_way_content(self, file_path: str) -> Dict[str, str]:
+        """提取冲突文件的三个阶段内容"""
+        contents = {}
+        for stage, label in [("1", "base"), ("2", "ours"), ("3", "theirs")]:
+            # 使用二进制读取再解码，防止特殊字符导致崩溃
+            raw = self._run_git_raw(["show", f":{stage}:{file_path}"], self.repo_b_dir)
+            contents[label] = raw.decode("utf-8", errors="replace")
+        return contents
+
+    def resolve_file_manually(self, file_path: str, final_content: str):
+        full_path = os.path.join(self.repo_b_dir, file_path)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(final_content)
+        self._run_git_text(["add", file_path], self.repo_b_dir)
+
+    def is_all_resolved(self) -> bool:
+        return len(self.get_conflict_files()) == 0

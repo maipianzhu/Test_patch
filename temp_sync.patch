@@ -1,115 +1,45 @@
 diff --git a/langchain_code_sync/backend/app/main.py b/langchain_code_sync/backend/app/main.py
-index 3c964a779b8a166575d3020a94f55c61e28f16e1..e4e625e806a50a340190aec3effe1a9878763dd3 100644
+index e4e625e806a50a340190aec3effe1a9878763dd3..aa30f2e3e049567290add506856a6f1ab7fb2f30 100644
 --- a/langchain_code_sync/backend/app/main.py
 +++ b/langchain_code_sync/backend/app/main.py
-@@ -161,6 +161,9 @@ async def confirm_push(req: ThreadRequest, background_tasks: BackgroundTasks):
+@@ -64,6 +64,7 @@ async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
+         "has_conflict": False,
+         "conflicts": [],
+         "status": "analyzing",
++        "push_summary": None,
+     }
  
-     # 1. 【核心修复】标记一个正在推送的临时状态，避免前端轮询到旧的 awaiting_push
-     # 我们把状态改为一个中间态 'pushing'，并添加一条明确的日志
-+    with open("debug.log", "a") as f:
-+        f.write(f"DEBUG: confirm_push called for thread {req.thread_id}\n")
-+
-     sync_graph.update_state(
-         config,
-         {
-@@ -171,7 +174,20 @@ async def confirm_push(req: ThreadRequest, background_tasks: BackgroundTasks):
-     )
- 
-     # 2. 唤醒图运行 push_approval 节点
--    background_tasks.add_task(sync_graph.invoke, None, config)
-+    def run_invoke():
-+        try:
-+            with open("debug.log", "a") as f:
-+                f.write(f"DEBUG: Invoking graph for thread {req.thread_id}\n")
-+            sync_graph.invoke(None, config)
-+            with open("debug.log", "a") as f:
-+                f.write(
-+                    f"DEBUG: Graph invocation finished for thread {req.thread_id}\n"
-+                )
-+        except Exception as e:
-+            with open("debug.log", "a") as f:
-+                f.write(f"ERROR: Graph invocation failed: {str(e)}\n")
-+
-+    background_tasks.add_task(run_invoke)
- 
-     return {"status": "ok"}
- 
-diff --git a/langchain_code_sync/backend/core/graph.py b/langchain_code_sync/backend/core/graph.py
-index db8b80495df7c89195fc8a8d335ebcb62a721b49..79c3626db2570a640556fed61f9ca7ce9a3ecb0b 100644
---- a/langchain_code_sync/backend/core/graph.py
-+++ b/langchain_code_sync/backend/core/graph.py
-@@ -32,7 +32,7 @@ def create_sync_graph():
-     # 5. 定义条件路由 (最核心的决策逻辑)
-     def router_after_patch(state: SyncState):
-         """决定 apply_patch 之后去哪"""
--        if state["status"] == "awaiting_push":
-+        if state["status"] in ["awaiting_push", "pushing"]:
-             return "approve"
-         if state["status"] == "completed":
-             return "end"
-diff --git a/langchain_code_sync/backend/core/nodes/human.py b/langchain_code_sync/backend/core/nodes/human.py
-index abd8e7a2823e78529f276d7a0fbd046e21c8e2af..9dc220510b94c8f5b65fb12a9b5d576ec15235a0 100644
---- a/langchain_code_sync/backend/core/nodes/human.py
-+++ b/langchain_code_sync/backend/core/nodes/human.py
-@@ -21,6 +21,8 @@ def human_review_node(state: SyncState) -> Dict[str, Any]:
- 
- 
- def push_approval_node(state: SyncState):
-+    with open("debug.log", "a") as f:
-+        f.write(f"DEBUG: Entering push_approval_node, status={state.get('status')}\n")
-     pm = PatchManager(state["repo_a_dir"], state["repo_b_dir"])
-     dm = DiscoveryManager(state["repo_a_dir"], state["repo_b_dir"])
- 
+     # 2. 【核心修复】强制更新状态，将该 thread_id 的进度拨回起点
 diff --git a/langchain_code_sync/backend/core/nodes/patching.py b/langchain_code_sync/backend/core/nodes/patching.py
-index 23420c871b3a5df21f5a790b330fa9626df78c78..e37c43ed6e8b7cf397e32a5034bad799eb91c45a 100644
+index e37c43ed6e8b7cf397e32a5034bad799eb91c45a..b1d5dce58691f99b2c761d7b850fefe3f8442bc2 100644
 --- a/langchain_code_sync/backend/core/nodes/patching.py
 +++ b/langchain_code_sync/backend/core/nodes/patching.py
-@@ -4,6 +4,10 @@ from services.git_manager import PatchManager, DiscoveryManager
+@@ -30,9 +30,16 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
+             dm.get_remote_head()
  
- 
- def apply_patch_node(state: SyncState) -> Dict[str, Any]:
-+    with open("debug.log", "a") as f:
-+        f.write(
-+            f"DEBUG: Entering apply_patch_node, status={state.get('status')}, index={state.get('current_commit_index')}\n"
-+        )
-     """
-     补丁应用节点：负责逐个应用补丁，处理成功提交及冲突提取。
-     """
-diff --git a/langchain_code_sync/backend/services/git_manager.py b/langchain_code_sync/backend/services/git_manager.py
-index 97469de6da3a76004750726ddccd8f0132a28279..f0bbd5f683b439d19f5f58725b77850016de09b5 100644
---- a/langchain_code_sync/backend/services/git_manager.py
-+++ b/langchain_code_sync/backend/services/git_manager.py
-@@ -111,7 +111,8 @@ class DiscoveryManager:
-             print("DEBUG: save_metadata 路径异常，尝试自动定位...")
- 
-         path = os.path.join(self.repo_b_dir, ".sync_metadata.json")
--        print(f"DEBUG: 正在保存元数据 -> {path}")
-+        with open("debug.log", "a") as f:
-+            f.write(f"DEBUG: 正在保存元数据 -> {path} (commit: {commit_id[:8]})\n")
- 
-         with open(path, "w", encoding="utf-8") as f:
-             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
-@@ -235,11 +236,21 @@ class PatchManager:
-             json.dump({"last_synced_commit_repo_a": commit_id}, f, indent=2)
- 
-     def push_to_remote(self):
--        subprocess.run(
-+        with open("debug.log", "a") as f:
-+            f.write(f"DEBUG: Executing git push in {self.repo_b_dir}\n")
-+        res = subprocess.run(
-             ["git", "push", "origin", "HEAD", "--force"],
-             cwd=self.repo_b_dir,
--            check=True,
-+            capture_output=True,
-+            text=True,
-         )
-+        with open("debug.log", "a") as f:
-+            f.write(f"DEBUG: Git push stdout: {res.stdout}\n")
-+            f.write(f"DEBUG: Git push stderr: {res.stderr}\n")
-+            f.write(f"DEBUG: Git push returncode: {res.returncode}\n")
+             # A. 仅生成推送摘要供前端展示
+-            push_summary = pm._run_git_text(
+-                ["log", "origin/main..HEAD", "--oneline"], state["repo_b_dir"]
+-            )
++            # 必须先 fetch 才能对比 origin/main
++            pm._run_git_text(["fetch", "origin"], state["repo_b_dir"])
 +
-+        if res.returncode != 0:
-+            raise Exception(f"Git push failed: {res.stderr}")
++            cmd = ["log", "origin/main..HEAD", "--oneline"]
++            push_summary = pm._run_git_text(cmd, state["repo_b_dir"])
++
++            with open("debug.log", "a") as f:
++                f.write(f"DEBUG: Push summary command: {' '.join(cmd)}\n")
++                f.write(f"DEBUG: Push summary output length: {len(push_summary)}\n")
++                f.write(f"DEBUG: Push summary content: {push_summary}\n")
  
-     def resolve_file_manually(self, file_path: str, final_content: str):
-         """
+             return {
+                 **state,
+diff --git a/langchain_code_sync/backend/core/state.py b/langchain_code_sync/backend/core/state.py
+index e32b63d27d33b83ffce3ce9edc077fe68989cbe7..af2b48dd4012babcab33c3dfa8576d577f6edabd 100644
+--- a/langchain_code_sync/backend/core/state.py
++++ b/langchain_code_sync/backend/core/state.py
+@@ -27,3 +27,4 @@ class SyncState(TypedDict):
+     # 流程控制
+     status: str  # "analyzing", "applying", "conflicted", "completed", "error"
+     logs: List[str]
++    push_summary: Optional[str]

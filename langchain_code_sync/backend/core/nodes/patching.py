@@ -30,9 +30,16 @@ def apply_patch_node(state: SyncState) -> Dict[str, Any]:
             dm.get_remote_head()
 
             # A. 仅生成推送摘要供前端展示
-            push_summary = pm._run_git_text(
-                ["log", "origin/main..HEAD", "--oneline"], state["repo_b_dir"]
-            )
+            # 必须先 fetch 才能对比 origin/main
+            pm._run_git_text(["fetch", "origin"], state["repo_b_dir"])
+
+            cmd = ["log", "origin/main..HEAD", "--oneline"]
+            push_summary = pm._run_git_text(cmd, state["repo_b_dir"])
+
+            with open("debug.log", "a") as f:
+                f.write(f"DEBUG: Push summary command: {' '.join(cmd)}\n")
+                f.write(f"DEBUG: Push summary output length: {len(push_summary)}\n")
+                f.write(f"DEBUG: Push summary content: {push_summary}\n")
 
             return {
                 **state,

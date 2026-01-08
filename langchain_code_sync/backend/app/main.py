@@ -64,6 +64,7 @@ async def start_sync(req: SyncRequest, background_tasks: BackgroundTasks):
         "has_conflict": False,
         "conflicts": [],
         "status": "analyzing",
+        "push_summary": None,
     }
 
     # 2. 【核心修复】强制更新状态，将该 thread_id 的进度拨回起点

@@ -27,3 +27,4 @@ class SyncState(TypedDict):
     # 流程控制
     status: str  # "analyzing", "applying", "conflicted", "completed", "error"
     logs: List[str]
+    push_summary: Optional[str]

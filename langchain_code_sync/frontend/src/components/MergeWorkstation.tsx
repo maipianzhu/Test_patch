@@ -16,16 +16,20 @@ interface ConflictProps {
 
 const MergeWorkstation: React.FC<ConflictProps> = ({ conflict, onResolve }) => {
     const [mergedContent, setMergedContent] = useState("");
+    // 记录当前正在编辑的文件路径
+    const currentFilePathRef = useRef("");
 
     // 使用 Ref 记录三个编辑器的实例，以便统一涂色
     const editorsRef = useRef<{ type: string; editor: any }[]>([]);
 
-    // 当文件切换时，重置中间栏内容并清空编辑器引用记录
     useEffect(() => {
-        setMergedContent(conflict.ai_suggestion || conflict.ours_content || "");
-        editorsRef.current = [];
+        // 只有当文件路径发生变化时，才重新填充内容
+        if (currentFilePathRef.current !== conflict.file_path) {
+            setMergedContent(conflict.ai_suggestion || conflict.ours_content || "");
+            currentFilePathRef.current = conflict.file_path;
+            // 这里的 editorsRef.current = [] 也要保留
+        }
     }, [conflict]);
-
     /**
      * 核心逻辑：精准计算并高亮差异
      */

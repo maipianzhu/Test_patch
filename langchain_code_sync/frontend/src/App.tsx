@@ -1,35 +1,58 @@
 import React, { useState, useEffect } from 'react';
 import { syncApi } from './api';
-import MergeWorkstation from './components/MergeWorkstation'; // 我们之前设计的组件
-import { Terminal, Play, CheckCircle, AlertTriangle } from 'lucide-react';
+import MergeWorkstation from './components/MergeWorkstation';
+import { Terminal, Play, CheckCircle } from 'lucide-react';
 
 function App() {
+    // 生成一个持久的 threadId
     const [threadId] = useState(`user_${Math.random().toString(36).slice(2, 9)}`);
     const [repoA, setRepoA] = useState('');
     const [repoB, setRepoB] = useState('');
     const [state, setState] = useState<any>(null);
     const [isPolling, setIsPolling] = useState(false);
 
-    // 轮询逻辑
+    // --- 关键方法：处理手动合并提交 ---
+    const handleResolve = async (filePath: string, content: string) => {
+        try {
+            // 1. 告诉后端：这个文件修好了
+            await syncApi.resolve(threadId, filePath, content);
+
+            // 2. 核心：乐观更新 (Optimistic Update)
+            // 即使后端还没轮询回来，我们也立即让前端切回“正在应用”状态
+            // 这样用户点击按钮后，界面会立刻变回黑色日志区，体验会很顺滑
+            setState((prev: any) => ({
+                ...prev,
+                status: 'applying',
+                has_conflict: false,
+                conflicts: []
+            }));
+
+            console.log("冲突已提交，等待后端推进...");
+        } catch (e) {
+            console.error("提交合并失败", e);
+            alert("提交合并失败，请检查网络或后端日志");
+        }
+    };
+
+    // 轮询逻辑：每 2 秒向后端要一次最新状态
     useEffect(() => {
         let timer: number;
-        if (isPolling) {
+
+        // 核心逻辑：如果是正在应用中，才开启轮询
+        // 如果已经是 'conflicted'（冲突中）或 'completed'（已完成），则不需要轮询
+        if (isPolling && state?.status !== 'conflicted' && state?.status !== 'completed') {
             timer = window.setInterval(async () => {
                 try {
                     const res = await syncApi.getStatus(threadId);
                     setState(res.data);
                 } catch (e: any) {
-                    // 如果是 404，说明后端还没准备好 Checkpoint，忽略它
-                    if (e.response?.status === 404) {
-                        console.log("等待任务初始化...");
-                    } else {
-                        console.error("轮询出错", e);
-                    }
+                    console.error("轮询失败", e);
                 }
             }, 2000);
         }
+
         return () => clearInterval(timer);
-    }, [isPolling, threadId]);
+    }, [isPolling, threadId, state?.status]); // 增加 state.status 作为依赖项
 
     const startSync = async () => {
         setIsPolling(true);
@@ -38,46 +61,29 @@ function App() {
 
     return (
         <div className="h-screen flex flex-col bg-gray-50 text-gray-900">
-            {/* 导航栏 */}
             <header className="bg-white border-b px-6 py-4 flex justify-between items-center shadow-sm">
                 <h1 className="text-xl font-bold flex items-center gap-2">
                     <Terminal className="text-blue-600" /> Git Sync Agent
                 </h1>
                 <div className="flex gap-4">
-                    <input
-                        className="border p-2 rounded w-64 text-sm"
-                        placeholder="Repo A 路径 (源)"
-                        value={repoA} onChange={e => setRepoA(e.target.value)}
-                    />
-                    <input
-                        className="border p-2 rounded w-64 text-sm"
-                        placeholder="Repo B 路径 (目标)"
-                        value={repoB} onChange={e => setRepoB(e.target.value)}
-                    />
-                    <button
-                        onClick={startSync}
-                        className="bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 hover:bg-blue-700 transition"
-                    >
+                    <input className="border p-2 rounded w-64 text-sm" placeholder="Repo A (源)" value={repoA} onChange={e => setRepoA(e.target.value)} />
+                    <input className="border p-2 rounded w-64 text-sm" placeholder="Repo B (目标)" value={repoB} onChange={e => setRepoB(e.target.value)} />
+                    <button onClick={startSync} className="bg-blue-600 text-white px-4 py-2 rounded flex items-center gap-2 hover:bg-blue-700 transition">
                         <Play size={16} /> 开始同步
                     </button>
                 </div>
             </header>
 
-            {/* 主工作区 */}
             <main className="flex-1 overflow-hidden relative">
                 {!state ? (
-                    <div className="flex items-center justify-center h-full text-gray-400">
-                        请输入路径并开始同步
+                    <div className="flex items-center justify-center h-full text-gray-400 font-mono italic">
+                        请在上方输入仓库 URL 并点击开始同步
                     </div>
                 ) : state.status === 'conflicted' ? (
                     /* 核心冲突处理界面 */
                     <MergeWorkstation
                         conflict={state.conflicts[0]}
-                        onResolve={async (path, content) => {
-                            await syncApi.resolve(threadId, path, content);
-                            // 提交后重置本地状态，等待轮询更新
-                            setState({ ...state, status: 'applying' });
-                        }}
+                        onResolve={handleResolve} // 调用上面定义的方法
                     />
                 ) : (
                     /* 日志展示界面 */
@@ -85,10 +91,10 @@ function App() {
                         {state.logs.map((log: string, i: number) => (
                             <div key={i} className="mb-1">{`> ${log}`}</div>
                         ))}
-                        {state.status === 'applying' && <div className="animate-pulse">_ 正在处理补丁...</div>}
+                        {state.status === 'applying' && <div className="animate-pulse ml-4 mt-2">_ 正在处理补丁序列...</div>}
                         {state.status === 'completed' && (
-                            <div className="text-blue-400 mt-4 flex items-center gap-2">
-                                <CheckCircle size={20} /> 所有补丁已成功同步！
+                            <div className="text-blue-400 mt-6 flex items-center gap-2 font-bold text-lg">
+                                <CheckCircle size={24} /> 所有补丁已成功同步至本地及远程！
                             </div>
                         )}
                     </div>

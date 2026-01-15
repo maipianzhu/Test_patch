@@ -1,85 +1,12 @@
-diff --git a/.gitignore b/.gitignore
-index f7515be086500c4af1e5189ad0b2669ea1badee6..9b29b7633d283d079b665fb126b5499d4b649764 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -29,4 +29,12 @@ langchain_code_sync/frontend/.env.local
- .vscode/
- .idea/
- 
--# 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000
-\ No newline at end of file
-+# 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000
-+
-+langchain_code_sync/backend/.langgraph_api/.langgraph_checkpoint.1.pckl
-+langchain_code_sync/backend/.langgraph_api/.langgraph_checkpoint.2.pckl
-+langchain_code_sync/backend/.langgraph_api/.langgraph_checkpoint.3.pckl
-+langchain_code_sync/backend/.langgraph_api/.langgraph_ops.pckl
-+langchain_code_sync/backend/.langgraph_api/.langgraph_retry_counter.pckl
-+langchain_code_sync/backend/.langgraph_api/store.pckl
-+langchain_code_sync/backend/.langgraph_api/store.vectors.pckl
-diff --git a/langchain_code_sync/backend/core/graph.py b/langchain_code_sync/backend/core/graph.py
-index 79c3626db2570a640556fed61f9ca7ce9a3ecb0b..5e5c40949e37be5a2ae908b8dc83933b24be70bc 100644
---- a/langchain_code_sync/backend/core/graph.py
-+++ b/langchain_code_sync/backend/core/graph.py
-@@ -12,7 +12,7 @@ from core.nodes.human import human_review_node, push_approval_node
- from core.state import SyncState
+diff --git a/langchain_code_sync/backend/core/state.py b/langchain_code_sync/backend/core/state.py
+index af2b48dd4012babcab33c3dfa8576d577f6edabd..477298167fe7702255b4a890ac1b8b19e7051bdc 100644
+--- a/langchain_code_sync/backend/core/state.py
++++ b/langchain_code_sync/backend/core/state.py
+@@ -1,5 +1,5 @@
+-from typing import List, Optional, TypedDict
+-from typing_extensions import Annotated
++from typing import List, Optional
++from typing_extensions import TypedDict
  
  
--def create_sync_graph():
-+def create_sync_graph(use_checkpointer: bool = True):
-     # 1. 初始化状态图，传入我们定义的 SyncState 结构
-     workflow = StateGraph(SyncState)
- 
-@@ -62,17 +62,25 @@ def create_sync_graph():
-     workflow.add_edge("human_review", "apply_patch")
- 
-     # 8. 【工程核心】配置持久化存储和中断点
--    # 1. 手动创建 sqlite3 连接
--    # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
--    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
-+    if use_checkpointer:
-+        # 1. 手动创建 sqlite3 连接
-+        # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
-+        conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
-+
-+        # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
-+        memory = SqliteSaver(conn)
-+        # ----------------
-+
-+        # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
-+        app = workflow.compile(
-+            checkpointer=memory, interrupt_before=["human_review", "push_approval"]
-+        )
-+    else:
-+        # LangGraph API 会自动处理持久化，不需要传 checkpointer
-+        app = workflow.compile(interrupt_before=["human_review", "push_approval"])
- 
--    # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
--    memory = SqliteSaver(conn)
--    # ----------------
-+    return app
- 
--    # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
--    app = workflow.compile(
--        checkpointer=memory, interrupt_before=["human_review", "push_approval"]
--    )
- 
--    return app
-+# 供 LangGraph CLI 使用（不带持久化）
-+graph = create_sync_graph(use_checkpointer=False)
-diff --git a/langchain_code_sync/backend/langgraph.json b/langchain_code_sync/backend/langgraph.json
-new file mode 100644
-index 0000000000000000000000000000000000000000..799289a8caf3e548ab8da762b15dbb06517bb7a3
---- /dev/null
-+++ b/langchain_code_sync/backend/langgraph.json
-@@ -0,0 +1,9 @@
-+{
-+    "dependencies": [
-+        "."
-+    ],
-+    "graphs": {
-+        "agent": "./core/graph.py:graph"
-+    },
-+    "env": ".env"
-+}
-\ No newline at end of file
+ class ConflictDetail(TypedDict):

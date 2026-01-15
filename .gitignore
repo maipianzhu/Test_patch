@@ -30,3 +30,11 @@ langchain_code_sync/frontend/.env.local
 .idea/
 
 # 后端启动命令 python -m uvicorn app.main:app --reload  --port 8000
+
+langchain_code_sync/backend/.langgraph_api/.langgraph_checkpoint.1.pckl
+langchain_code_sync/backend/.langgraph_api/.langgraph_checkpoint.2.pckl
+langchain_code_sync/backend/.langgraph_api/.langgraph_checkpoint.3.pckl
+langchain_code_sync/backend/.langgraph_api/.langgraph_ops.pckl
+langchain_code_sync/backend/.langgraph_api/.langgraph_retry_counter.pckl
+langchain_code_sync/backend/.langgraph_api/store.pckl
+langchain_code_sync/backend/.langgraph_api/store.vectors.pckl

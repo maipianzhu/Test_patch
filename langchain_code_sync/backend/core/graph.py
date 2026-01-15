@@ -12,7 +12,7 @@ from core.nodes.human import human_review_node, push_approval_node
 from core.state import SyncState
 
 
-def create_sync_graph():
+def create_sync_graph(use_checkpointer: bool = True):
     # 1. 初始化状态图，传入我们定义的 SyncState 结构
     workflow = StateGraph(SyncState)
 
@@ -62,17 +62,25 @@ def create_sync_graph():
     workflow.add_edge("human_review", "apply_patch")
 
     # 8. 【工程核心】配置持久化存储和中断点
-    # 1. 手动创建 sqlite3 连接
-    # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
-    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+    if use_checkpointer:
+        # 1. 手动创建 sqlite3 连接
+        # check_same_thread=False 是关键，因为 FastAPI 的请求会在不同线程中运行
+        conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
 
-    # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
-    memory = SqliteSaver(conn)
-    # ----------------
+        # 2. 直接实例化 SqliteSaver，而不是使用 from_conn_string()
+        memory = SqliteSaver(conn)
+        # ----------------
 
-    # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
-    app = workflow.compile(
-        checkpointer=memory, interrupt_before=["human_review", "push_approval"]
-    )
+        # 编译图：在进入 human_review 之前强制中断，等待外部唤醒
+        app = workflow.compile(
+            checkpointer=memory, interrupt_before=["human_review", "push_approval"]
+        )
+    else:
+        # LangGraph API 会自动处理持久化，不需要传 checkpointer
+        app = workflow.compile(interrupt_before=["human_review", "push_approval"])
 
     return app
+
+
+# 供 LangGraph CLI 使用（不带持久化）
+graph = create_sync_graph(use_checkpointer=False)

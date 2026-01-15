@@ -1,12 +1,10 @@
-diff --git a/langchain_code_sync/backend/core/state.py b/langchain_code_sync/backend/core/state.py
-index af2b48dd4012babcab33c3dfa8576d577f6edabd..477298167fe7702255b4a890ac1b8b19e7051bdc 100644
---- a/langchain_code_sync/backend/core/state.py
-+++ b/langchain_code_sync/backend/core/state.py
-@@ -1,5 +1,5 @@
--from typing import List, Optional, TypedDict
--from typing_extensions import Annotated
-+from typing import List, Optional
-+from typing_extensions import TypedDict
- 
- 
- class ConflictDetail(TypedDict):
+diff --git a/langchain_code_sync/backend/core/nodes/ai_expert.py b/langchain_code_sync/backend/core/nodes/ai_expert.py
+index 6bf53c9817565c3d05db1487c663a4f6e2803251..65e6ba4ed43cafd174d9e8f02d866af269c58c86 100644
+--- a/langchain_code_sync/backend/core/nodes/ai_expert.py
++++ b/langchain_code_sync/backend/core/nodes/ai_expert.py
+@@ -1,4 +1,4 @@
+-from typing import Any, Dict, List
++from typing import Any, Dict
+ from langchain_core.prompts import ChatPromptTemplate
+ from langchain_core.output_parsers import JsonOutputParser
+ from core.state import SyncState, ConflictDetail
